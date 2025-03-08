@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "tinystoriesproject"
+version = "0.1.0"
+description = ""
+authors = ["shawn.kim <dun03191@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "=3.10.5"
+torch = "^2.6.0"
+pandas = "^2.2.3"
+scikit-learn = "^1.6.1"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
