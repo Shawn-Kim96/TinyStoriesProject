@@ -10,6 +10,9 @@ python = "=3.10.5"
 torch = "^2.6.0"
 pandas = "^2.2.3"
 scikit-learn = "^1.6.1"
+ipykernel = "^6.29.5"
+huggingface-hub = "^0.29.2"
+datasets = "^3.3.2"
 
 
 [build-system]
