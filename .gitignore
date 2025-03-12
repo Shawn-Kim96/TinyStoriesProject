@@ -1,6 +1,11 @@
 # Created by https://www.toptal.com/developers/gitignore/api/macos,windows,visualstudiocode,pycharm,python
 # Edit at https://www.toptal.com/developers/gitignore?templates=macos,windows,visualstudiocode,pycharm,python
 
+### Files
+.data/processed/index_encoded/train_dataset_ml50_ol15.pt
+.data/processed/index_encoded/valid_dataset_ml50_ol15.pt
+
+
 ### macOS ###
 # General
 .DS_Store
