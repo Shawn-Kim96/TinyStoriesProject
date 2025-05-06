@@ -1,20 +1,29 @@
 from transformers import AutoTokenizer
 import torch
+from pathlib import Path
 
 class BPETokenizerWrapper:
     """
     A wrapper for Hugging Face's pre-trained BPE tokenizer to use in the TinyStories infilling model.
     This class provides a consistent interface for the rest of the project while using a pre-trained tokenizer.
     """
-    def __init__(self, model_name="gpt2", special_tokens=None):
+    def __init__(self, model_name="gpt2", special_tokens=None, cache_dir=None):
         """
         Initialize the BPE tokenizer wrapper.
         
         Args:
             model_name: The name of the pre-trained model to load tokenizer from
             special_tokens: A dictionary of special tokens to add to the tokenizer
+            cache_dir: Directory to cache downloaded tokenizer files
         """
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        # Set up cache directory for tokenizer
+        if cache_dir:
+            tokenizer_cache = Path(cache_dir) / "tokenizer"
+            tokenizer_cache.mkdir(parents=True, exist_ok=True)
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=str(tokenizer_cache))
+            print(f"Using tokenizer cache directory: {tokenizer_cache}")
+        else:
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         
         # Add special tokens if needed
         if special_tokens is None:

@@ -8,10 +8,12 @@ import os
 import argparse
 import random
 import numpy as np
+from pathlib import Path
 
 from src.dataset import TinyStoriesBPEInfillingDataset
 from src.models import StoryInfillingModel
 from src.bpe_tokenizer import BPETokenizerWrapper
+from src.config import get_model_dir, get_data_dir, get_cache_dir, get_default_tokenizer_model
 
 
 def padding_collate_fn(batch):
@@ -74,10 +76,20 @@ def train(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'mps')
     print(f"Using device: {device}")
     
+    # Create necessary directories
+    model_dir = Path(args.model_dir)
+    model_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Using model directory: {model_dir}")
+    
+    # Set cache directory for datasets
+    cache_dir = Path(args.cache_dir) / "datasets"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Using cache directory: {cache_dir}")
+    
     # Load dataset
     print("Loading dataset...")
-    train_dataset = load_dataset("roneneldan/TinyStories", split="train")
-    valid_dataset = load_dataset("roneneldan/TinyStories", split="validation")
+    train_dataset = load_dataset("roneneldan/TinyStories", split="train", cache_dir=str(cache_dir))
+    valid_dataset = load_dataset("roneneldan/TinyStories", split="validation", cache_dir=str(cache_dir))
     print(f"Train dataset size: {len(train_dataset)}")
     print(f"Validation dataset size: {len(valid_dataset)}")
     
@@ -85,7 +97,8 @@ def train(args):
     print(f"Initializing BPE tokenizer from {args.tokenizer_model}...")
     tokenizer = BPETokenizerWrapper(
         model_name=args.tokenizer_model,
-        special_tokens={"blank_token": "<blank>"}
+        special_tokens={"blank_token": "<blank>"},
+        cache_dir=args.cache_dir
     )
     vocab_size = tokenizer.get_vocab_size()
     print(f"Tokenizer vocabulary size: {vocab_size}")
@@ -252,10 +265,8 @@ def train(args):
             best_valid_loss = avg_valid_loss
             
             # Create model directory if it doesn't exist
-            os.makedirs('model', exist_ok=True)
+            model_path = Path(model_dir) / 'tinystories_bpe_infilling_model.pth'
             
-            # Save model
-            model_path = os.path.join('model', 'tinystories_bpe_infilling_model.pth')
             torch.save({
                 'epoch': epoch + 1,
                 'model_state_dict': model.state_dict(),
@@ -271,8 +282,16 @@ def train(args):
 def parse_args():
     parser = argparse.ArgumentParser(description="Train a story infilling model on TinyStories dataset with BPE tokenizer")
     
+    # Path parameters
+    parser.add_argument('--model_dir', type=str, default=str(get_model_dir()),
+                        help='Directory to save model checkpoints')
+    parser.add_argument('--data_dir', type=str, default=str(get_data_dir()),
+                        help='Directory for datasets')
+    parser.add_argument('--cache_dir', type=str, default=str(get_cache_dir()),
+                        help='Directory for cache files')
+    
     # Dataset parameters
-    parser.add_argument('--tokenizer_model', type=str, default='gpt2', 
+    parser.add_argument('--tokenizer_model', type=str, default=get_default_tokenizer_model(), 
                         help='Pre-trained model to use for BPE tokenizer')
     parser.add_argument('--max_seq_length', type=int, default=256, 
                         help='Maximum sequence length')

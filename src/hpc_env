@@ -1,0 +1,14 @@
+# Environment Configuration for HPC
+# Copy this file to .env and update as needed
+
+# Base paths
+DATA_DIR=/data/cmpe258-sp25/018219422/data
+MODEL_DIR=/data/cmpe258-sp25/018219422/models
+CACHE_DIR=/data/cmpe258-sp25/018219422/cache
+
+# Specific dataset paths
+TINYSTORIES_DATA=/data/cmpe258-sp25/018219422/data/tinystories
+TOKENIZER_CACHE=/data/cmpe258-sp25/018219422/cache/tokenizer
+
+# Default tokenizer model to use
+DEFAULT_TOKENIZER_MODEL=gpt2 
