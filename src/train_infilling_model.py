@@ -1,0 +1,321 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader
+from datasets import load_dataset
+import time
+import os
+import argparse
+import random
+import numpy as np
+
+from src.dataset import TinyStoriesBPEInfillingDataset
+from src.models import StoryInfillingModel
+from src.bpe_tokenizer import BPETokenizerWrapper
+
+
+def padding_collate_fn(batch):
+    """
+    Collate function that pads sequences in a batch to the same length.
+    """
+    input_ids = [item['input_ids'] for item in batch]
+    target_ids = [item['target_ids'] for item in batch]
+    
+    # Get other fields
+    first_sentences = [item['first_sentence'] for item in batch]
+    last_sentences = [item['last_sentence'] for item in batch]
+    full_stories = [item['full_story'] for item in batch]
+    
+    # Find max length in the batch
+    max_input_len = max(len(ids) for ids in input_ids)
+    max_target_len = max(len(ids) for ids in target_ids)
+    
+    # Pad sequences
+    padded_inputs = []
+    padded_targets = []
+    padding_masks = []
+    
+    for inp, tgt in zip(input_ids, target_ids):
+        # Pad input
+        inp_padding = torch.zeros(max_input_len - len(inp), dtype=torch.long)
+        padded_inp = torch.cat([inp, inp_padding])
+        padded_inputs.append(padded_inp)
+        
+        # Create padding mask (1 for real tokens, 0 for padding)
+        padding_mask = torch.ones(len(inp), dtype=torch.long)
+        mask_padding = torch.zeros(max_input_len - len(inp), dtype=torch.long)
+        padding_mask = torch.cat([padding_mask, mask_padding])
+        padding_masks.append(padding_mask)
+        
+        # Pad target
+        tgt_padding = torch.zeros(max_target_len - len(tgt), dtype=torch.long)
+        padded_tgt = torch.cat([tgt, tgt_padding])
+        padded_targets.append(padded_tgt)
+    
+    return {
+        'input_ids': torch.stack(padded_inputs),
+        'target_ids': torch.stack(padded_targets),
+        'padding_mask': torch.stack(padding_masks),
+        'first_sentences': first_sentences,
+        'last_sentences': last_sentences,
+        'full_stories': full_stories
+    }
+
+
+def train(args):
+    # Set random seeds for reproducibility
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
+    
+    # Device configuration
+    device = torch.device('cuda' if torch.cuda.is_available() else 'mps')
+    print(f"Using device: {device}")
+    
+    # Load dataset
+    print("Loading dataset...")
+    train_dataset = load_dataset("roneneldan/TinyStories", split="train")
+    valid_dataset = load_dataset("roneneldan/TinyStories", split="validation")
+    print(f"Train dataset size: {len(train_dataset)}")
+    print(f"Validation dataset size: {len(valid_dataset)}")
+    
+    # Initialize BPE tokenizer
+    print(f"Initializing BPE tokenizer from {args.tokenizer_model}...")
+    tokenizer = BPETokenizerWrapper(
+        model_name=args.tokenizer_model,
+        special_tokens={"blank_token": "<blank>"}
+    )
+    vocab_size = tokenizer.get_vocab_size()
+    print(f"Tokenizer vocabulary size: {vocab_size}")
+    
+    # Create datasets
+    print("Creating datasets...")
+    train_data = TinyStoriesBPEInfillingDataset(
+        train_dataset, 
+        tokenizer, 
+        max_length=args.max_seq_length,
+        min_story_length=args.min_story_length
+    )
+    valid_data = TinyStoriesBPEInfillingDataset(
+        valid_dataset, 
+        tokenizer, 
+        max_length=args.max_seq_length,
+        min_story_length=args.min_story_length
+    )
+    print(f"Processed train dataset size: {len(train_data)}")
+    print(f"Processed validation dataset size: {len(valid_data)}")
+    
+    # Create data loaders
+    train_loader = DataLoader(
+        train_data, 
+        batch_size=args.batch_size, 
+        shuffle=True, 
+        collate_fn=padding_collate_fn, 
+        num_workers=args.num_workers
+    )
+    valid_loader = DataLoader(
+        valid_data, 
+        batch_size=args.batch_size, 
+        shuffle=False, 
+        collate_fn=padding_collate_fn, 
+        num_workers=args.num_workers
+    )
+    
+    # Initialize model
+    print("Initializing model...")
+    model = StoryInfillingModel(
+        vocab_size=vocab_size,
+        embed_dim=args.embed_dim,
+        num_layers=args.num_layers,
+        num_heads=args.num_heads,
+        ff_dim=args.ff_dim,
+        max_seq_length=args.max_seq_length,
+        dropout=args.dropout,
+        pad_token_id=tokenizer.pad_token_id,
+        blank_token_id=tokenizer.blank_token_id
+    ).to(device)
+    
+    # Loss function and optimizer
+    criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
+    optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
+    
+    # Training loop
+    print("Starting training...")
+    best_valid_loss = float('inf')
+    
+    for epoch in range(args.num_epochs):
+        model.train()
+        train_loss = 0.0
+        start_time = time.time()
+        
+        for batch_idx, batch in enumerate(train_loader):
+            input_ids = batch['input_ids'].to(device)
+            first_sentences = batch['first_sentences']
+            last_sentences = batch['last_sentences']
+            full_stories = batch['full_stories']
+            
+            # Process each item in the batch
+            batch_loss = 0.0
+            optimizer.zero_grad()
+            
+            for i in range(len(first_sentences)):
+                # Use train_with_teacher_forcing to get loss
+                _, loss = model.train_with_teacher_forcing(
+                    first_sentence=first_sentences[i],
+                    last_sentence=last_sentences[i],
+                    ground_truth=full_stories[i],
+                    tokenizer=tokenizer,
+                    max_tokens=args.max_seq_length,
+                    teacher_forcing_ratio=args.teacher_forcing_ratio
+                )
+                
+                batch_loss += loss
+            
+            # Normalize batch loss
+            batch_loss = batch_loss / len(first_sentences)
+            
+            # Backward and optimize
+            batch_loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
+            optimizer.step()
+            
+            train_loss += batch_loss.item()
+            
+            if (batch_idx + 1) % args.log_interval == 0:
+                print(f"Epoch [{epoch+1}/{args.num_epochs}], Batch [{batch_idx+1}/{len(train_loader)}], "
+                      f"Loss: {batch_loss.item():.4f}, Time: {time.time() - start_time:.2f}s")
+                start_time = time.time()
+        
+        avg_train_loss = train_loss / len(train_loader)
+        
+        # Validation
+        model.eval()
+        valid_loss = 0.0
+        with torch.no_grad():
+            for batch in valid_loader:
+                first_sentences = batch['first_sentences']
+                last_sentences = batch['last_sentences']
+                full_stories = batch['full_stories']
+                
+                batch_loss = 0.0
+                
+                for i in range(len(first_sentences)):
+                    # Use train_with_teacher_forcing to evaluate
+                    # Didn't used generate function because we need loss for output
+                    _, loss = model.train_with_teacher_forcing(
+                        first_sentence=first_sentences[i],
+                        last_sentence=last_sentences[i],
+                        ground_truth=full_stories[i],
+                        tokenizer=tokenizer,
+                        max_tokens=args.max_seq_length,
+                        teacher_forcing_ratio=0.0  # Use 0.0 for validation to test real generation capability
+                    )
+                    
+                    batch_loss += loss
+                
+                # Normalize batch loss
+                batch_loss = batch_loss / len(first_sentences)
+                valid_loss += batch_loss.item()
+        
+        avg_valid_loss = valid_loss / len(valid_loader)
+        
+        print(f"Epoch [{epoch+1}/{args.num_epochs}], "
+              f"Train Loss: {avg_train_loss:.4f}, Valid Loss: {avg_valid_loss:.4f}")
+        
+        # Generate a sample
+        if (epoch + 1) % args.sample_interval == 0:
+            sample_idx = random.randint(0, len(valid_data) - 1)
+            sample = valid_data[sample_idx]
+            first_sentence = sample['first_sentence']
+            last_sentence = sample['last_sentence']
+            
+            print("\nSample generation:")
+            print(f"First sentence: {first_sentence}")
+            print(f"Last sentence: {last_sentence}")
+            
+            # Generate story using generate_or_train
+            generated_story = model.generate(
+                first_sentence=first_sentence, 
+                last_sentence=last_sentence, 
+                tokenizer=tokenizer, 
+                max_length=100,
+                teacher_forcing_ratio=0.0,  # During testing, we don't want teacher forcing
+            )
+            
+            print(f"Generated story: {generated_story}")
+            print(f"Original story: {sample['full_story']}")
+        
+        # Save the model if it has the best validation loss so far
+        if avg_valid_loss < best_valid_loss:
+            best_valid_loss = avg_valid_loss
+            
+            # Create model directory if it doesn't exist
+            os.makedirs('model', exist_ok=True)
+            
+            # Save model
+            model_path = os.path.join('model', 'tinystories_bpe_infilling_model.pth')
+            torch.save({
+                'epoch': epoch + 1,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'train_loss': avg_train_loss,
+                'valid_loss': avg_valid_loss,
+                'tokenizer_model': args.tokenizer_model,
+                'args': vars(args)
+            }, model_path)
+            print(f"Model saved to {model_path}")
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train a story infilling model on TinyStories dataset with BPE tokenizer")
+    
+    # Dataset parameters
+    parser.add_argument('--tokenizer_model', type=str, default='gpt2', 
+                        help='Pre-trained model to use for BPE tokenizer')
+    parser.add_argument('--max_seq_length', type=int, default=256, 
+                        help='Maximum sequence length')
+    parser.add_argument('--min_story_length', type=int, default=5, 
+                        help='Minimum story length to include (in tokens)')
+    
+    # Model parameters
+    parser.add_argument('--embed_dim', type=int, default=384, 
+                        help='Embedding dimension')
+    parser.add_argument('--num_layers', type=int, default=6, 
+                        help='Number of transformer layers')
+    parser.add_argument('--num_heads', type=int, default=6, 
+                        help='Number of attention heads')
+    parser.add_argument('--ff_dim', type=int, default=1536, 
+                        help='Feed-forward dimension')
+    parser.add_argument('--dropout', type=float, default=0.1, 
+                        help='Dropout rate')
+    
+    # Training parameters
+    parser.add_argument('--batch_size', type=int, default=32, 
+                        help='Batch size')
+    parser.add_argument('--num_epochs', type=int, default=10, 
+                        help='Number of training epochs')
+    parser.add_argument('--learning_rate', type=float, default=1e-4, 
+                        help='Learning rate')
+    parser.add_argument('--clip_grad', type=float, default=1.0, 
+                        help='Gradient clipping')
+    parser.add_argument('--num_workers', type=int, default=4, 
+                        help='Number of data loader workers')
+    parser.add_argument('--teacher_forcing_ratio', type=float, default=1.0, 
+                        help='Teacher forcing ratio')
+    
+    # Misc parameters
+    parser.add_argument('--seed', type=int, default=42, 
+                        help='Random seed')
+    parser.add_argument('--log_interval', type=int, default=100, 
+                        help='Log interval in batches')
+    parser.add_argument('--sample_interval', type=int, default=1, 
+                        help='Sample generation interval in epochs')
+    
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    train(args) 
