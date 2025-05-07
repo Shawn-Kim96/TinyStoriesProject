@@ -10,6 +10,7 @@ import random
 import numpy as np
 from pathlib import Path
 from glob import glob
+import pickle
 
 from src.dataset import TinyStoriesBPEInfillingDataset
 from src.models import StoryInfillingModel
@@ -106,6 +107,47 @@ def padding_collate_fn(batch):
     }
 
 
+def get_processed_dataset_cache_path(cache_dir, split, max_length, min_story_length, offline_mode, tokenizer_model):
+    """Create a unique cache path for processed dataset based on parameters"""
+    cache_dir = Path(cache_dir) / "processed_datasets"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create a unique filename based on parameters that affect dataset processing
+    mode = "offline" if offline_mode else "online"
+    filename = f"{split}_{mode}_{max_length}_{min_story_length}_{os.path.basename(tokenizer_model)}.pkl"
+    return cache_dir / filename
+
+
+def save_processed_dataset(dataset, cache_path):
+    """Save processed dataset to cache"""
+    print(f"Saving processed dataset to {cache_path}")
+    try:
+        with open(cache_path, 'wb') as f:
+            pickle.dump(dataset, f)
+        print(f"Successfully saved processed dataset to cache")
+        return True
+    except Exception as e:
+        print(f"Warning: Failed to save processed dataset to cache: {str(e)}")
+        return False
+
+
+def load_processed_dataset(cache_path):
+    """Load processed dataset from cache if available"""
+    if not cache_path.exists():
+        print(f"No cached dataset found at {cache_path}")
+        return None
+    
+    print(f"Loading processed dataset from cache: {cache_path}")
+    try:
+        with open(cache_path, 'rb') as f:
+            dataset = pickle.load(f)
+        print(f"Successfully loaded processed dataset from cache with {len(dataset)} examples")
+        return dataset
+    except Exception as e:
+        print(f"Warning: Failed to load processed dataset from cache: {str(e)}")
+        return None
+
+
 def train(args):
     # Set random seeds for reproducibility
     random.seed(args.seed)
@@ -161,180 +203,211 @@ def train(args):
     vocab_size = tokenizer.get_vocab_size()
     print(f"Tokenizer vocabulary size: {vocab_size}")
     
-    # Create datasets
-    print("Creating datasets...")
-    train_data = TinyStoriesBPEInfillingDataset(
-        train_dataset, 
-        tokenizer, 
-        max_length=args.max_seq_length,
-        min_story_length=args.min_story_length
+    # Check for cached processed datasets
+    train_cache_path = get_processed_dataset_cache_path(
+        args.cache_dir, 
+        "train", 
+        args.max_seq_length, 
+        args.min_story_length, 
+        offline_mode, 
+        args.tokenizer_model
     )
-    valid_data = TinyStoriesBPEInfillingDataset(
-        valid_dataset, 
-        tokenizer, 
-        max_length=args.max_seq_length,
-        min_story_length=args.min_story_length
+    
+    valid_cache_path = get_processed_dataset_cache_path(
+        args.cache_dir, 
+        "validation", 
+        args.max_seq_length, 
+        args.min_story_length, 
+        offline_mode, 
+        args.tokenizer_model
     )
+    
+    # Try to load train data from cache
+    train_data = load_processed_dataset(train_cache_path)
+    if train_data is None:
+        print("Creating train dataset...")
+        train_data = TinyStoriesBPEInfillingDataset(
+            train_dataset, 
+            tokenizer, 
+            max_length=args.max_seq_length,
+            min_story_length=args.min_story_length
+        )
+        # Save processed dataset to cache
+        save_processed_dataset(train_data, train_cache_path)
+    
+    # Try to load validation data from cache
+    valid_data = load_processed_dataset(valid_cache_path)
+    if valid_data is None:
+        print("Creating validation dataset...")
+        valid_data = TinyStoriesBPEInfillingDataset(
+            valid_dataset, 
+            tokenizer, 
+            max_length=args.max_seq_length,
+            min_story_length=args.min_story_length
+        )
+        # Save processed dataset to cache
+        save_processed_dataset(valid_data, valid_cache_path)
+    
     print(f"Processed train dataset size: {len(train_data)}")
     print(f"Processed validation dataset size: {len(valid_data)}")
     
-    # Create data loaders
-    train_loader = DataLoader(
-        train_data, 
-        batch_size=args.batch_size, 
-        shuffle=True, 
-        collate_fn=padding_collate_fn, 
-        num_workers=args.num_workers
-    )
-    valid_loader = DataLoader(
-        valid_data, 
-        batch_size=args.batch_size, 
-        shuffle=False, 
-        collate_fn=padding_collate_fn, 
-        num_workers=args.num_workers
-    )
+    # # Create data loaders
+    # train_loader = DataLoader(
+    #     train_data, 
+    #     batch_size=args.batch_size, 
+    #     shuffle=True, 
+    #     collate_fn=padding_collate_fn, 
+    #     num_workers=args.num_workers
+    # )
+    # valid_loader = DataLoader(
+    #     valid_data, 
+    #     batch_size=args.batch_size, 
+    #     shuffle=False, 
+    #     collate_fn=padding_collate_fn, 
+    #     num_workers=args.num_workers
+    # )
     
-    # Initialize model
-    print("Initializing model...")
-    model = StoryInfillingModel(
-        vocab_size=vocab_size,
-        embed_dim=args.embed_dim,
-        num_layers=args.num_layers,
-        num_heads=args.num_heads,
-        ff_dim=args.ff_dim,
-        max_seq_length=args.max_seq_length,
-        dropout=args.dropout,
-        pad_token_id=tokenizer.pad_token_id,
-        blank_token_id=tokenizer.blank_token_id
-    ).to(device)
+    # # Initialize model
+    # print("Initializing model...")
+    # model = StoryInfillingModel(
+    #     vocab_size=vocab_size,
+    #     embed_dim=args.embed_dim,
+    #     num_layers=args.num_layers,
+    #     num_heads=args.num_heads,
+    #     ff_dim=args.ff_dim,
+    #     max_seq_length=args.max_seq_length,
+    #     dropout=args.dropout,
+    #     pad_token_id=tokenizer.pad_token_id,
+    #     blank_token_id=tokenizer.blank_token_id
+    # ).to(device)
     
-    # Loss function and optimizer
-    criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
-    optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
+    # # Loss function and optimizer
+    # criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
+    # optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
     
-    # Training loop
-    print("Starting training...")
-    best_valid_loss = float('inf')
+    # # Training loop
+    # print("Starting training...")
+    # best_valid_loss = float('inf')
     
-    for epoch in range(args.num_epochs):
-        model.train()
-        train_loss = 0.0
-        start_time = time.time()
+    # for epoch in range(args.num_epochs):
+    #     model.train()
+    #     train_loss = 0.0
+    #     start_time = time.time()
         
-        for batch_idx, batch in enumerate(train_loader):
-            input_ids = batch['input_ids'].to(device)
-            first_sentences = batch['first_sentences']
-            last_sentences = batch['last_sentences']
-            full_stories = batch['full_stories']
+    #     for batch_idx, batch in enumerate(train_loader):
+    #         input_ids = batch['input_ids'].to(device)
+    #         first_sentences = batch['first_sentences']
+    #         last_sentences = batch['last_sentences']
+    #         full_stories = batch['full_stories']
             
-            # Process each item in the batch
-            batch_loss = 0.0
-            optimizer.zero_grad()
+    #         # Process each item in the batch
+    #         batch_loss = 0.0
+    #         optimizer.zero_grad()
             
-            for i in range(len(first_sentences)):
-                # Use train_with_teacher_forcing to get loss
-                _, loss = model.train_with_teacher_forcing(
-                    first_sentence=first_sentences[i],
-                    last_sentence=last_sentences[i],
-                    ground_truth=full_stories[i],
-                    tokenizer=tokenizer,
-                    max_tokens=args.max_seq_length,
-                    teacher_forcing_ratio=args.teacher_forcing_ratio
-                )
+    #         for i in range(len(first_sentences)):
+    #             # Use train_with_teacher_forcing to get loss
+    #             _, loss = model.train_with_teacher_forcing(
+    #                 first_sentence=first_sentences[i],
+    #                 last_sentence=last_sentences[i],
+    #                 ground_truth=full_stories[i],
+    #                 tokenizer=tokenizer,
+    #                 max_tokens=args.max_seq_length,
+    #                 teacher_forcing_ratio=args.teacher_forcing_ratio
+    #             )
                 
-                batch_loss += loss
+    #             batch_loss += loss
             
-            # Normalize batch loss
-            batch_loss = batch_loss / len(first_sentences)
+    #         # Normalize batch loss
+    #         batch_loss = batch_loss / len(first_sentences)
             
-            # Backward and optimize
-            batch_loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
-            optimizer.step()
+    #         # Backward and optimize
+    #         batch_loss.backward()
+    #         torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
+    #         optimizer.step()
             
-            train_loss += batch_loss.item()
+    #         train_loss += batch_loss.item()
             
-            if (batch_idx + 1) % args.log_interval == 0:
-                print(f"Epoch [{epoch+1}/{args.num_epochs}], Batch [{batch_idx+1}/{len(train_loader)}], "
-                      f"Loss: {batch_loss.item():.4f}, Time: {time.time() - start_time:.2f}s")
-                start_time = time.time()
+    #         if (batch_idx + 1) % args.log_interval == 0:
+    #             print(f"Epoch [{epoch+1}/{args.num_epochs}], Batch [{batch_idx+1}/{len(train_loader)}], "
+    #                   f"Loss: {batch_loss.item():.4f}, Time: {time.time() - start_time:.2f}s")
+    #             start_time = time.time()
         
-        avg_train_loss = train_loss / len(train_loader)
+    #     avg_train_loss = train_loss / len(train_loader)
         
-        # Validation
-        model.eval()
-        valid_loss = 0.0
-        with torch.no_grad():
-            for batch in valid_loader:
-                first_sentences = batch['first_sentences']
-                last_sentences = batch['last_sentences']
-                full_stories = batch['full_stories']
+    #     # Validation
+    #     model.eval()
+    #     valid_loss = 0.0
+    #     with torch.no_grad():
+    #         for batch in valid_loader:
+    #             first_sentences = batch['first_sentences']
+    #             last_sentences = batch['last_sentences']
+    #             full_stories = batch['full_stories']
                 
-                batch_loss = 0.0
+    #             batch_loss = 0.0
                 
-                for i in range(len(first_sentences)):
-                    # Use train_with_teacher_forcing to evaluate
-                    # Didn't used generate function because we need loss for output
-                    _, loss = model.train_with_teacher_forcing(
-                        first_sentence=first_sentences[i],
-                        last_sentence=last_sentences[i],
-                        ground_truth=full_stories[i],
-                        tokenizer=tokenizer,
-                        max_tokens=args.max_seq_length,
-                        teacher_forcing_ratio=0.0  # Use 0.0 for validation to test real generation capability
-                    )
+    #             for i in range(len(first_sentences)):
+    #                 # Use train_with_teacher_forcing to evaluate
+    #                 # Didn't used generate function because we need loss for output
+    #                 _, loss = model.train_with_teacher_forcing(
+    #                     first_sentence=first_sentences[i],
+    #                     last_sentence=last_sentences[i],
+    #                     ground_truth=full_stories[i],
+    #                     tokenizer=tokenizer,
+    #                     max_tokens=args.max_seq_length,
+    #                     teacher_forcing_ratio=0.0  # Use 0.0 for validation to test real generation capability
+    #                 )
                     
-                    batch_loss += loss
+    #                 batch_loss += loss
                 
-                # Normalize batch loss
-                batch_loss = batch_loss / len(first_sentences)
-                valid_loss += batch_loss.item()
+    #             # Normalize batch loss
+    #             batch_loss = batch_loss / len(first_sentences)
+    #             valid_loss += batch_loss.item()
         
-        avg_valid_loss = valid_loss / len(valid_loader)
+    #     avg_valid_loss = valid_loss / len(valid_loader)
         
-        print(f"Epoch [{epoch+1}/{args.num_epochs}], "
-              f"Train Loss: {avg_train_loss:.4f}, Valid Loss: {avg_valid_loss:.4f}")
+    #     print(f"Epoch [{epoch+1}/{args.num_epochs}], "
+    #           f"Train Loss: {avg_train_loss:.4f}, Valid Loss: {avg_valid_loss:.4f}")
         
-        # Generate a sample
-        if (epoch + 1) % args.sample_interval == 0:
-            sample_idx = random.randint(0, len(valid_data) - 1)
-            sample = valid_data[sample_idx]
-            first_sentence = sample['first_sentence']
-            last_sentence = sample['last_sentence']
+    #     # Generate a sample
+    #     if (epoch + 1) % args.sample_interval == 0:
+    #         sample_idx = random.randint(0, len(valid_data) - 1)
+    #         sample = valid_data[sample_idx]
+    #         first_sentence = sample['first_sentence']
+    #         last_sentence = sample['last_sentence']
             
-            print("\nSample generation:")
-            print(f"First sentence: {first_sentence}")
-            print(f"Last sentence: {last_sentence}")
+    #         print("\nSample generation:")
+    #         print(f"First sentence: {first_sentence}")
+    #         print(f"Last sentence: {last_sentence}")
             
-            # Generate story using generate_or_train
-            generated_story = model.generate(
-                first_sentence=first_sentence, 
-                last_sentence=last_sentence, 
-                tokenizer=tokenizer, 
-                max_length=100,
-                teacher_forcing_ratio=0.0,  # During testing, we don't want teacher forcing
-            )
+    #         # Generate story using generate_or_train
+    #         generated_story = model.generate(
+    #             first_sentence=first_sentence, 
+    #             last_sentence=last_sentence, 
+    #             tokenizer=tokenizer, 
+    #             max_length=100,
+    #             teacher_forcing_ratio=0.0,  # During testing, we don't want teacher forcing
+    #         )
             
-            print(f"Generated story: {generated_story}")
-            print(f"Original story: {sample['full_story']}")
+    #         print(f"Generated story: {generated_story}")
+    #         print(f"Original story: {sample['full_story']}")
         
-        # Save the model if it has the best validation loss so far
-        if avg_valid_loss < best_valid_loss:
-            best_valid_loss = avg_valid_loss
+    #     # Save the model if it has the best validation loss so far
+    #     if avg_valid_loss < best_valid_loss:
+    #         best_valid_loss = avg_valid_loss
             
-            # Create model directory if it doesn't exist
-            model_path = Path(model_dir) / 'tinystories_bpe_infilling_model.pth'
+    #         # Create model directory if it doesn't exist
+    #         model_path = Path(model_dir) / 'tinystories_bpe_infilling_model.pth'
             
-            torch.save({
-                'epoch': epoch + 1,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'train_loss': avg_train_loss,
-                'valid_loss': avg_valid_loss,
-                'tokenizer_model': args.tokenizer_model,
-                'args': vars(args)
-            }, model_path)
-            print(f"Model saved to {model_path}")
+    #         torch.save({
+    #             'epoch': epoch + 1,
+    #             'model_state_dict': model.state_dict(),
+    #             'optimizer_state_dict': optimizer.state_dict(),
+    #             'train_loss': avg_train_loss,
+    #             'valid_loss': avg_valid_loss,
+    #             'tokenizer_model': args.tokenizer_model,
+    #             'args': vars(args)
+    #         }, model_path)
+    #         print(f"Model saved to {model_path}")
 
 
 def parse_args():
