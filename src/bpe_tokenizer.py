@@ -1,13 +1,15 @@
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoConfig
 import torch
 from pathlib import Path
+import os
+import json
 
 class BPETokenizerWrapper:
     """
     A wrapper for Hugging Face's pre-trained BPE tokenizer to use in the TinyStories infilling model.
     This class provides a consistent interface for the rest of the project while using a pre-trained tokenizer.
     """
-    def __init__(self, model_name="gpt2", special_tokens=None, cache_dir=None):
+    def __init__(self, model_name="gpt2", special_tokens=None, cache_dir=None, offline_mode=False):
         """
         Initialize the BPE tokenizer wrapper.
         
@@ -15,43 +17,76 @@ class BPETokenizerWrapper:
             model_name: The name of the pre-trained model to load tokenizer from
             special_tokens: A dictionary of special tokens to add to the tokenizer
             cache_dir: Directory to cache downloaded tokenizer files
+            offline_mode: Whether to run in offline mode (no internet connection)
         """
-        # Set up cache directory for tokenizer
+        self.model_name = model_name
+        self.special_tokens = special_tokens or {}
+        self.offline_mode = offline_mode
+        
+        # Set up cache directory
         if cache_dir:
-            tokenizer_cache = Path(cache_dir) / "tokenizer"
-            tokenizer_cache.mkdir(parents=True, exist_ok=True)
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=str(tokenizer_cache))
-            print(f"Using tokenizer cache directory: {tokenizer_cache}")
-        else:
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        
-        # Add special tokens if needed
-        if special_tokens is None:
-            special_tokens = {"blank_token": "<blank>"}
-        
-        # Add the blank token and any other special tokens
-        special_tokens_dict = {}
-        if "blank_token" in special_tokens and special_tokens["blank_token"] not in self.tokenizer.get_vocab():
-            special_tokens_dict["additional_special_tokens"] = [special_tokens["blank_token"]]
-
-        if special_tokens_dict:
-            num_added = self.tokenizer.add_special_tokens(special_tokens_dict)
-            print(f"Added {num_added} special tokens to the tokenizer")
-        
-        # Get important token IDs
-        self.pad_token_id = self.tokenizer.pad_token_id
-        if self.pad_token_id is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-            self.pad_token_id = self.tokenizer.pad_token_id
+            # Configure paths according to Hugging Face cache structure
+            base_cache = Path(cache_dir) / "tokenizers" / model_name
+            tokenizer_cache = base_cache / f"gpt2_tokenizer" / f"models--{model_name}"
+            snapshot_dir = tokenizer_cache / "snapshots" / "607a30d783dfa663caf39e06633721c8d4cfcd7e"
             
-        self.unk_token_id = self.tokenizer.unk_token_id
-        self.blank_token_id = self.tokenizer.convert_tokens_to_ids(special_tokens.get("blank_token", "<blank>"))
+            print(f"Using tokenizer cache directory: {tokenizer_cache}")
+            print(f"Using snapshot directory: {snapshot_dir}")
+            
+            if offline_mode and snapshot_dir.exists():
+                print(f"Found snapshot directory with contents: {os.listdir(snapshot_dir)}")
+                # Directly specify the directory containing tokenizer files
+                model_path = str(snapshot_dir)
+            else:
+                if offline_mode:
+                    print(f"Warning: Could not find snapshot directory at {snapshot_dir}")
+                model_path = model_name
+        else:
+            model_path = model_name
+        
+        try:
+            # Load the tokenizer, respecting offline mode setting
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                model_path,
+                cache_dir=str(base_cache) if cache_dir and not offline_mode else None,
+                local_files_only=offline_mode,  # Only use local files in offline mode
+                trust_remote_code=True
+            )
+            print("Successfully loaded tokenizer" + (" from local cache" if offline_mode else ""))
+        except Exception as e:
+            print(f"Error loading tokenizer: {str(e)}")
+            if cache_dir:
+                print(f"Cache directory structure:")
+                print(f"- Base cache: {base_cache}")
+                print(f"- Tokenizer cache: {tokenizer_cache}")
+                print(f"- Snapshots: {os.listdir(tokenizer_cache / 'snapshots') if (tokenizer_cache / 'snapshots').exists() else 'Not found'}")
+                if snapshot_dir.exists():
+                    print(f"- Snapshot contents: {os.listdir(snapshot_dir)}")
+            raise
+        
+        # Add special tokens
+        if special_tokens:
+            # Handle blank_token separately
+            blank_token = special_tokens.pop("blank_token", "<blank>")
+            if blank_token:
+                self.tokenizer.add_tokens([blank_token])
+            
+            # Add remaining special tokens
+            if special_tokens:
+                self.tokenizer.add_special_tokens(special_tokens)
+            
+            # Set pad token
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+        
+        # Store special token IDs
+        self.pad_token_id = self.tokenizer.pad_token_id
+        self.blank_token_id = self.tokenizer.convert_tokens_to_ids(blank_token)
         
         # Cache vocab
         self.vocab = self.tokenizer.get_vocab()
         self.vocab_size = len(self.vocab)
         self.idx2word = {v: k for k, v in self.vocab.items()}
-        
+    
     def encode(self, text):
         """
         Encode a string into token IDs.
@@ -62,7 +97,7 @@ class BPETokenizerWrapper:
         Returns:
             A list of token IDs
         """
-        return self.tokenizer.encode(text, add_special_tokens=False)
+        return self.tokenizer.encode(text, add_special_tokens=True)
     
     def encode_batch(self, texts, padding=True, truncation=True, max_length=512):
         """
@@ -98,7 +133,7 @@ class BPETokenizerWrapper:
         """
         if isinstance(token_ids, torch.Tensor):
             token_ids = token_ids.tolist()
-        return self.tokenizer.decode(token_ids, skip_special_tokens=False)
+        return self.tokenizer.decode(token_ids, skip_special_tokens=True)
     
     def get_vocab_size(self):
         """

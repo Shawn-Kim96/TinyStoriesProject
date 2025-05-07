@@ -1,19 +1,61 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
-from datasets import load_dataset
+from torch.utils.data import DataLoader, Dataset
+import json
 import time
 import os
 import argparse
 import random
 import numpy as np
 from pathlib import Path
+from glob import glob
 
 from src.dataset import TinyStoriesBPEInfillingDataset
 from src.models import StoryInfillingModel
 from src.bpe_tokenizer import BPETokenizerWrapper
 from src.config import get_model_dir, get_data_dir, get_cache_dir, get_default_tokenizer_model
+
+
+class TinyStoriesDataset(Dataset):
+    def __init__(self, data_dir, split):
+        self.data = []
+        
+        data_file = Path(data_dir) / f"{split}.jsonl"
+        print(f"Loading data from {data_file}")
+        
+        try:
+            with open(data_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    self.data.append(json.loads(line))
+            print(f"Successfully loaded {len(self.data)} examples from {split} split")
+        except Exception as e:
+            print(f"Error reading file {data_file}: {str(e)}")
+            raise
+    
+    def __len__(self):
+        return len(self.data)
+    
+    def __getitem__(self, idx):
+        return self.data[idx]
+
+
+class OnlineTinyStoriesDataset(Dataset):
+    def __init__(self, split):
+        try:
+            from datasets import load_dataset
+            dataset = load_dataset("roneneldan/TinyStories", split=split)
+            self.data = dataset
+            print(f"Successfully loaded {len(self.data)} examples from {split} split using HuggingFace Datasets")
+        except Exception as e:
+            print(f"Error loading dataset from HuggingFace: {str(e)}")
+            raise
+    
+    def __len__(self):
+        return len(self.data)
+    
+    def __getitem__(self, idx):
+        return self.data[idx]
 
 
 def padding_collate_fn(batch):
@@ -73,7 +115,7 @@ def train(args):
         torch.cuda.manual_seed_all(args.seed)
     
     # Device configuration
-    device = torch.device('cuda' if torch.cuda.is_available() else 'mps')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
     # Create necessary directories
@@ -86,19 +128,35 @@ def train(args):
     cache_dir.mkdir(parents=True, exist_ok=True)
     print(f"Using cache directory: {cache_dir}")
     
-    # Load dataset
+    # Check if running in offline or online mode
+    offline_mode = args.offline_mode
+    print(f"Running in {'offline' if offline_mode else 'online'} mode")
+    
+    # Load dataset based on mode
     print("Loading dataset...")
-    train_dataset = load_dataset("roneneldan/TinyStories", split="train", cache_dir=str(cache_dir))
-    valid_dataset = load_dataset("roneneldan/TinyStories", split="validation", cache_dir=str(cache_dir))
+    if offline_mode:
+        # Load from local files in offline mode
+        data_dir = Path(args.data_dir) / "tinystories_data"
+        train_dataset = TinyStoriesDataset(data_dir, "train")
+        valid_dataset = TinyStoriesDataset(data_dir, "validation")
+    else:
+        # Load directly from Hugging Face in online mode
+        train_dataset = OnlineTinyStoriesDataset("train")
+        valid_dataset = OnlineTinyStoriesDataset("validation")
+    
     print(f"Train dataset size: {len(train_dataset)}")
     print(f"Validation dataset size: {len(valid_dataset)}")
     
     # Initialize BPE tokenizer
     print(f"Initializing BPE tokenizer from {args.tokenizer_model}...")
+    special_tokens = {
+        "blank_token": "<blank>"
+    }
     tokenizer = BPETokenizerWrapper(
         model_name=args.tokenizer_model,
-        special_tokens={"blank_token": "<blank>"},
-        cache_dir=args.cache_dir
+        special_tokens=special_tokens,
+        cache_dir=args.cache_dir,
+        offline_mode=offline_mode  # Pass the offline mode parameter
     )
     vocab_size = tokenizer.get_vocab_size()
     print(f"Tokenizer vocabulary size: {vocab_size}")
@@ -289,6 +347,10 @@ def parse_args():
                         help='Directory for datasets')
     parser.add_argument('--cache_dir', type=str, default=str(get_cache_dir()),
                         help='Directory for cache files')
+    
+    # Environment parameters
+    parser.add_argument('--offline_mode', action='store_true',
+                        help='Run in offline mode (no internet access)')
     
     # Dataset parameters
     parser.add_argument('--tokenizer_model', type=str, default=get_default_tokenizer_model(), 
