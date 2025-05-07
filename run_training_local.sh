@@ -30,10 +30,10 @@ python -m src.train_infilling_model \
     --batch_size=32 \
     --num_epochs=10 \
     --learning_rate=1e-4 \
-    --embed_dim=384 \
-    --num_layers=6 \
-    --num_heads=6 \
-    --ff_dim=1536 \
+    --embed_dim=128 \
+    --num_layers=4 \
+    --num_heads=4 \
+    --ff_dim=256 \
     --dropout=0.1 \
     --log_interval=50 \
     --seed=42

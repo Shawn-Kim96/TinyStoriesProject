@@ -40,21 +40,32 @@ if [ ! -d "$DATASET_DIR/train" ] && [ ! -f "$DATASET_DIR/train.jsonl" ]; then
     exit 1
 fi
 
-# Run training script
+# Use only first GPU
+export CUDA_VISIBLE_DEVICES=0
+
+# Try to free GPU memory before starting
+python -c "import torch; torch.cuda.empty_cache()"
+
+# Set memory allocation settings to avoid fragmentation
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+# Run training script in single GPU mode with smaller parameters
 python -m src.train_infilling_model \
     --data_dir="$DATA_DIR" \
     --model_dir="$MODEL_DIR" \
     --cache_dir="$CACHE_DIR" \
     --offline_mode \
-    --batch_size=32 \
+    --batch_size=16 \
     --num_epochs=10 \
     --learning_rate=1e-4 \
-    --embed_dim=384 \
-    --num_layers=6 \
-    --num_heads=6 \
-    --ff_dim=1536 \
+    --embed_dim=128 \
+    --num_layers=4 \
+    --num_heads=4 \
+    --ff_dim=256 \
     --dropout=0.1 \
-    --log_interval=50 \
-    --seed=42
+    --log_interval=25 \
+    --seed=42 \
+    --num_workers=8 \
+    --max_seq_length=128
 
 echo "Training completed!"

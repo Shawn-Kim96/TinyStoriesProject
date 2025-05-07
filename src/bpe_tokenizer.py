@@ -23,32 +23,38 @@ class BPETokenizerWrapper:
         self.special_tokens = special_tokens or {}
         self.offline_mode = offline_mode
         
-        # Set up cache directory
         if cache_dir:
             # Configure paths according to Hugging Face cache structure
             base_cache = Path(cache_dir) / "tokenizers" / model_name
-            tokenizer_cache = base_cache / f"gpt2_tokenizer" / f"models--{model_name}"
-            snapshot_dir = tokenizer_cache / "snapshots" / "607a30d783dfa663caf39e06633721c8d4cfcd7e"
+            tokenizer_cache = base_cache / f"gpt2_tokenizer" / f"models--{model_name.replace('/', '--')}"
+            
+            # Check for cached files in multiple possible locations
+            possible_snapshot_dirs = list(tokenizer_cache.glob("snapshots/*/"))
             
             print(f"Using tokenizer cache directory: {tokenizer_cache}")
-            print(f"Using snapshot directory: {snapshot_dir}")
             
-            if offline_mode and snapshot_dir.exists():
-                print(f"Found snapshot directory with contents: {os.listdir(snapshot_dir)}")
-                # Directly specify the directory containing tokenizer files
-                model_path = str(snapshot_dir)
+            if offline_mode:
+                if possible_snapshot_dirs:
+                    snapshot_dir = possible_snapshot_dirs[0]
+                    print(f"Found snapshot directory: {snapshot_dir}")
+                    # Directly specify the directory containing tokenizer files
+                    model_path = str(snapshot_dir)
+                else:
+                    print(f"Warning: Could not find snapshot directory under {tokenizer_cache}")
+                    # Try to use the tokenizer cache directly
+                    model_path = str(tokenizer_cache)
             else:
-                if offline_mode:
-                    print(f"Warning: Could not find snapshot directory at {snapshot_dir}")
                 model_path = model_name
         else:
+            base_cache = None
             model_path = model_name
         
         try:
             # Load the tokenizer, respecting offline mode setting
+            print(f"Attempting to load tokenizer from {model_path} with offline_mode={offline_mode}")
             self.tokenizer = AutoTokenizer.from_pretrained(
                 model_path,
-                cache_dir=str(base_cache) if cache_dir and not offline_mode else None,
+                cache_dir=str(base_cache) if base_cache else None,
                 local_files_only=offline_mode,  # Only use local files in offline mode
                 trust_remote_code=True
             )
@@ -60,8 +66,8 @@ class BPETokenizerWrapper:
                 print(f"- Base cache: {base_cache}")
                 print(f"- Tokenizer cache: {tokenizer_cache}")
                 print(f"- Snapshots: {os.listdir(tokenizer_cache / 'snapshots') if (tokenizer_cache / 'snapshots').exists() else 'Not found'}")
-                if snapshot_dir.exists():
-                    print(f"- Snapshot contents: {os.listdir(snapshot_dir)}")
+                if possible_snapshot_dirs:
+                    print(f"- Snapshot contents: {os.listdir(possible_snapshot_dirs[0])}")
             raise
         
         # Add special tokens
