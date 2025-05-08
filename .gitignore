@@ -372,3 +372,7 @@ $RECYCLE.BIN/
 # End of https://www.toptal.com/developers/gitignore/api/macos,windows,visualstudiocode,pycharm,python
 data/processed/index_encoded/train_dataset_ml50_ol15.pt
 .gitignore
+
+models/
+cache/
+data/
