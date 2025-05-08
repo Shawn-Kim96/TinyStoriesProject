@@ -307,18 +307,22 @@ def train(args):
     )
     
     # Initialize model
-    print("Initializing model...")
+    # Check if model already exists
     model = StoryInfillingModel(
-        vocab_size=vocab_size,
-        embed_dim=args.embed_dim,
-        num_layers=args.num_layers,
-        num_heads=args.num_heads,
-        ff_dim=args.ff_dim,
-        max_seq_length=args.max_seq_length,
-        dropout=args.dropout,
-        pad_token_id=tokenizer.pad_token_id,
-        blank_token_id=tokenizer.blank_token_id
+            vocab_size=vocab_size,
+            embed_dim=args.embed_dim,
+            num_layers=args.num_layers,
+            num_heads=args.num_heads,
+            ff_dim=args.ff_dim,
+            max_seq_length=args.max_seq_length,
+            dropout=args.dropout,
+            pad_token_id=tokenizer.pad_token_id,
+            blank_token_id=tokenizer.blank_token_id
     ).to(device)
+    model_path = Path(model_dir) / f"tinystories_bpe_infilling_model_emb{args.embed_dim}_layer{args.num_layers}_head{args.num_heads}_bs{args.batch_size}_seq{args.max_seq_length}.pth"
+    if model_path.exists():
+        print(f"Loading existing model from {model_path}")
+        model.load_state_dict(torch.load(model_path))
     
     # Loss function and optimizer
     criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
@@ -487,10 +491,7 @@ def train(args):
         # Save the model if it has the best validation loss so far
         if avg_valid_loss < best_valid_loss:
             best_valid_loss = avg_valid_loss
-            
-            # Create model directory if it doesn't exist
-            model_path = Path(model_dir) / 'tinystories_bpe_infilling_model.pth'
-            
+                        
             torch.save({
                 'epoch': epoch + 1,
                 'model_state_dict': model.state_dict(),
