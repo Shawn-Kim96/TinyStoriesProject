@@ -11,6 +11,9 @@ import numpy as np
 from pathlib import Path
 from glob import glob
 import pickle
+import logging
+import sys
+from datetime import datetime
 
 from src.dataset import TinyStoriesBPEInfillingDataset
 from src.models import StoryInfillingModel
@@ -185,6 +188,20 @@ def process_batch_vectorized(model, batch, tokenizer, device, teacher_forcing_ra
         return None
 
 
+def setup_logging(model_dir):
+    """Set up logging configuration"""
+    log_file = model_dir / f"training_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+    return logging.getLogger(__name__)
+
+
 def train(args):
     # Set random seeds for reproducibility
     random.seed(args.seed)
@@ -328,11 +345,16 @@ def train(args):
     criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
     optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
     
+    # Setup logging
+    logger = setup_logging(model_dir)
+    logger.info(f"Starting training with configuration: {args}")
+    
     # Training loop
     print("Starting training...")
     best_valid_loss = float('inf')
     
     for epoch in range(args.num_epochs):
+        logger.info(f"Starting epoch {epoch + 1}/{args.num_epochs}")
         model.train()
         train_loss = 0.0
         start_time = time.time()
@@ -502,6 +524,10 @@ def train(args):
                 'args': vars(args)
             }, model_path)
             print(f"Model saved to {model_path}")
+        
+        logger.info(f"Epoch {epoch + 1} completed. Loss: {avg_valid_loss:.4f}")
+    
+    logger.info("Training completed!")
 
 
 def parse_args():
