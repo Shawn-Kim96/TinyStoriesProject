@@ -183,6 +183,11 @@ def train(args):
     )
     vocab_size = tokenizer.get_vocab_size()
     print(f"Tokenizer vocabulary size: {vocab_size}")
+    print(f"Using blank_token_id: {tokenizer.blank_token_id}")
+    
+    # Verify blank token is properly added
+    if tokenizer.blank_token_id == tokenizer.tokenizer.unk_token_id:
+        print("WARNING: blank_token_id is the same as unk_token_id. This may cause issues during generation.")
     
     # Check for cached processed datasets
     train_cache_path = get_processed_dataset_cache_path(
@@ -262,9 +267,9 @@ def train(args):
         max_seq_length=args.max_seq_length,
         dropout=args.dropout,
         pad_token_id=tokenizer.pad_token_id,
-        blank_token_id=tokenizer.blank_token_id,
-        bos_token_id=tokenizer.bos_token_id,
-        eos_token_id=tokenizer.eos_token_id
+        blank_token_id=tokenizer.blank_token_id if tokenizer.blank_token_id != tokenizer.tokenizer.unk_token_id else None,
+        bos_token_id=tokenizer.tokenizer.bos_token_id,
+        eos_token_id=tokenizer.tokenizer.eos_token_id
     ).to(device)
     
     # Loss function and optimizer

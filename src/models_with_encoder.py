@@ -358,7 +358,27 @@ class StoryInfillingEncoderDecoder(nn.Module):
 
                 # Sample from filtered distribution
                 probs = torch.softmax(next_token_logits, dim=-1)
-                next_token = torch.multinomial(probs, num_samples=1).item()
+                
+                # Check for NaN or negative values in probs
+                if torch.isnan(probs).any() or (probs < 0).any():
+                    # Fix problematic probabilities
+                    probs = torch.nan_to_num(probs, nan=1e-7, posinf=1e-7, neginf=1e-7)
+                    # Ensure non-negative
+                    probs = torch.clamp(probs, min=1e-7)
+                    # Renormalize
+                    probs = probs / probs.sum(dim=-1, keepdim=True)
+                
+                # Safety check for sum
+                if not (0.99 < probs.sum() < 1.01):
+                    probs = probs / probs.sum(dim=-1, keepdim=True)
+                
+                # Use softmax again to be safe
+                try:
+                    next_token = torch.multinomial(probs, num_samples=1).item()
+                except Exception as e:
+                    # Fallback: just pick most likely token
+                    print(f"Sampling failed, falling back to argmax: {e}")
+                    next_token = torch.argmax(probs).item()
                 
                 # Stop if EOS token is generated
                 if next_token == self.eos_token_id:
