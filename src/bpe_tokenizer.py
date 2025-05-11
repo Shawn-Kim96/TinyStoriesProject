@@ -26,7 +26,7 @@ class BPETokenizerWrapper:
         if cache_dir:
             # Configure paths according to Hugging Face cache structure
             base_cache = Path(cache_dir) / "tokenizers" / model_name
-            tokenizer_cache = base_cache / f"gpt2_tokenizer" / f"models--{model_name.replace('/', '--')}"
+            tokenizer_cache = base_cache / f"models--{model_name.replace('/', '--')}"
             
             # Check for cached files in multiple possible locations
             possible_snapshot_dirs = list(tokenizer_cache.glob("snapshots/*/"))
@@ -87,6 +87,8 @@ class BPETokenizerWrapper:
         # Store special token IDs
         self.pad_token_id = self.tokenizer.pad_token_id
         self.blank_token_id = self.tokenizer.convert_tokens_to_ids(blank_token)
+        self.bos_token_id = self.tokenizer.convert_tokens_to_ids("<BOS>")
+        self.eos_token_id = self.tokenizer.convert_tokens_to_ids("</s>")
         
         # Cache vocab
         self.vocab = self.tokenizer.get_vocab()

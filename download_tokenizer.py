@@ -30,8 +30,13 @@ def download_tokenizer(model_name, cache_dir):
         print(f"Successfully downloaded tokenizer: {tokenizer.__class__.__name__}")
         
         # Add some special tokens to ensure they're downloaded too
-        tokenizer.add_special_tokens({"additional_special_tokens": ["<blank>"]})
-        
+        tokenizer.add_special_tokens({
+            "bos_token": "<BOS>",
+            "eos_token": "</s>",
+            "pad_token": "<PAD>",
+            "additional_special_tokens": ["<blank>"]
+        })
+
         # Print cache structure for reference
         tokenizer_cache = base_cache / f"models--{model_name.replace('/', '--')}"
         

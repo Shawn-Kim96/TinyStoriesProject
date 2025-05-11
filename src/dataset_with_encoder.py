@@ -130,7 +130,7 @@ def encoder_decoder_padding_collate_fn(batch):
     for enc_inp, dec_inp, dec_tgt in zip(encoder_input_ids, decoder_input_ids, decoder_target_ids):
         # Pad encoder input
         enc_inp_padding = torch.zeros(max_encoder_len - len(enc_inp), dtype=torch.long)
-        padded_enc_inp = torch.cat([torch.tensor(enc_inp, dtype=torch.long), enc_inp_padding])
+        padded_enc_inp = torch.cat([enc_inp.clone().detach(), enc_inp_padding])
         padded_encoder_inputs.append(padded_enc_inp)
         
         # Create encoder padding mask (1 for real tokens, 0 for padding)
@@ -141,7 +141,7 @@ def encoder_decoder_padding_collate_fn(batch):
         
         # Pad decoder input
         dec_inp_padding = torch.zeros(max_decoder_len - len(dec_inp), dtype=torch.long)
-        padded_dec_inp = torch.cat([torch.tensor(dec_inp, dtype=torch.long), dec_inp_padding])
+        padded_dec_inp = torch.cat([dec_inp.clone().detach(), dec_inp_padding])
         padded_decoder_inputs.append(padded_dec_inp)
         
         # Create decoder padding mask
@@ -152,7 +152,7 @@ def encoder_decoder_padding_collate_fn(batch):
         
         # Pad target
         tgt_padding = torch.zeros(max_target_len - len(dec_tgt), dtype=torch.long)
-        padded_tgt = torch.cat([torch.tensor(dec_tgt, dtype=torch.long), tgt_padding])
+        padded_tgt = torch.cat([dec_tgt.clone().detach(), tgt_padding])
         padded_targets.append(padded_tgt)
     
     return {

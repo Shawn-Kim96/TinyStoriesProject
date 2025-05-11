@@ -15,8 +15,8 @@ import sys
 from datetime import datetime
 
 # Import the encoder-decoder classes
-from dataset_with_encoder import TinyStoriesEncoderDecoderDataset, encoder_decoder_padding_collate_fn
-from models_with_encoder import StoryInfillingEncoderDecoder
+from src.dataset_with_encoder import TinyStoriesEncoderDecoderDataset, encoder_decoder_padding_collate_fn
+from src.models_with_encoder import StoryInfillingEncoderDecoder
 from src.bpe_tokenizer import BPETokenizerWrapper
 from src.config import get_model_dir, get_data_dir, get_cache_dir, get_default_tokenizer_model
 
@@ -73,7 +73,7 @@ class OnlineTinyStoriesDataset:
         return self.data[idx]
 
 
-def get_processed_dataset_cache_path(cache_dir, split, max_length, min_story_length, offline_mode, tokenizer_model, max_samples=None):
+def get_processed_dataset_cache_path(cache_dir, split, max_length, min_story_length, offline_mode, tokenizer_model, encoder_decoder_mode, max_samples=None):
     """Create a unique cache path for processed dataset based on parameters"""
     cache_dir = Path(cache_dir) / "processed_datasets"
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -81,7 +81,7 @@ def get_processed_dataset_cache_path(cache_dir, split, max_length, min_story_len
     # Create a unique filename based on parameters that affect dataset processing
     mode = "offline" if offline_mode else "online"
     samples_info = f"_samples{max_samples}" if max_samples is not None else ""
-    filename = f"{split}_encoder_decoder_{mode}_{max_length}_{min_story_length}{samples_info}_{os.path.basename(tokenizer_model)}.pkl"
+    filename = f"{split}_encoder_decoder_{mode}_{max_length}_{min_story_length}{samples_info}_{os.path.basename(tokenizer_model)}_{encoder_decoder_mode}.pkl"
     return cache_dir / filename
 
 
@@ -192,7 +192,8 @@ def train(args):
         args.min_story_length, 
         offline_mode, 
         args.tokenizer_model,
-        args.max_samples
+        args.max_samples,
+        'encoder_decoder_true'
     )
     
     valid_cache_path = get_processed_dataset_cache_path(
@@ -202,7 +203,8 @@ def train(args):
         args.min_story_length, 
         offline_mode, 
         args.tokenizer_model,
-        args.max_samples
+        args.max_samples,
+        'encoder_decoder_true'
     )
     
     # Try to load train data from cache
@@ -413,7 +415,7 @@ def parse_args():
                         help='Pre-trained model to use for BPE tokenizer')
     parser.add_argument('--max_seq_length', type=int, default=256, 
                         help='Maximum sequence length')
-    parser.add_argument('--min_story_length', type=int, default=5, 
+    parser.add_argument('--min_story_length', type=int, default=10, 
                         help='Minimum story length to include (in tokens)')
     
     # Model parameters
