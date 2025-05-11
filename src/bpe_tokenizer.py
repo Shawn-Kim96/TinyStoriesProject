@@ -72,23 +72,45 @@ class BPETokenizerWrapper:
         
         # Add special tokens
         if special_tokens:
-            # Handle blank_token separately
-            blank_token = special_tokens.pop("blank_token", "<blank>")
+            # Prepare special tokens dictionary
+            special_tokens_dict = {}
+            
+            # Handle blank_token
+            blank_token = special_tokens.get("blank_token", "<blank>")
+            
+            # Prepare additional special tokens list
+            additional_tokens = []
             if blank_token:
-                self.tokenizer.add_tokens([blank_token])
+                additional_tokens.append(blank_token)
             
-            # Add remaining special tokens
-            if special_tokens:
-                self.tokenizer.add_special_tokens(special_tokens)
+            # Add any additional special tokens from dictionary
+            if additional_tokens:
+                special_tokens_dict["additional_special_tokens"] = additional_tokens
+                
+            # Add special tokens to tokenizer
+            if special_tokens_dict:
+                num_added = self.tokenizer.add_special_tokens(special_tokens_dict)
+                print(f"Added {num_added} special tokens to the tokenizer")
             
-            # Set pad token
-            self.tokenizer.pad_token = self.tokenizer.eos_token
+            # Ensure pad token exists
+            if self.tokenizer.pad_token is None:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
+                print("Set pad_token to eos_token")
         
         # Store special token IDs
         self.pad_token_id = self.tokenizer.pad_token_id
+        # Handle blank token ID safely
+        blank_token = special_tokens.get("blank_token", "<blank>") if special_tokens else "<blank>"
         self.blank_token_id = self.tokenizer.convert_tokens_to_ids(blank_token)
-        self.bos_token_id = self.tokenizer.convert_tokens_to_ids("<BOS>")
-        self.eos_token_id = self.tokenizer.convert_tokens_to_ids("</s>")
+        print(f"Blank token '{blank_token}' has ID: {self.blank_token_id}")
+        
+        # Check if blank token was properly added
+        if self.blank_token_id == self.tokenizer.unk_token_id:
+            print(f"WARNING: Blank token '{blank_token}' was converted to the unknown token ID: {self.blank_token_id}")
+            # Try adding it again directly 
+            self.tokenizer.add_tokens([blank_token])
+            self.blank_token_id = self.tokenizer.convert_tokens_to_ids(blank_token)
+            print(f"Re-added blank token, new ID: {self.blank_token_id}")
         
         # Cache vocab
         self.vocab = self.tokenizer.get_vocab()

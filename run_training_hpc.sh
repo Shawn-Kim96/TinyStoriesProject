@@ -3,7 +3,7 @@
 # Script to run the TinyStories model training on HPC
 #
 
-# Set base directory for HPC environment
+# Create directories for data, models, and cache if they don't exist
 HPC_BASE_DIR="/data/cmpe258-sp25/018219422"
 
 # Create directories if they don't exist
