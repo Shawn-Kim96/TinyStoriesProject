@@ -62,24 +62,24 @@ CUDA_LAUNCH_BLOCKING=1 python -m src.train_infilling_model_with_encoder \
     --model_dir="$MODEL_DIR" \
     --cache_dir="$CACHE_DIR" \
     --offline_mode \
-    --batch_size=16 \
+    --batch_size=8 \
     --num_epochs=20 \
-    --learning_rate=5e-5 \
-    --embed_dim=256 \
-    --num_encoder_layers=6 \
-    --num_decoder_layers=6 \
-    --num_heads=8 \
-    --ff_dim=512 \
+    --learning_rate=1e-5 \
+    --embed_dim=128 \
+    --num_encoder_layers=4 \
+    --num_decoder_layers=4 \
+    --num_heads=4 \
+    --ff_dim=256 \
     --dropout=0.1 \
-    --log_interval=50 \
+    --log_interval=25 \
     --seed=42 \
-    --num_workers=4 \
-    --max_seq_length=128 \
+    --num_workers=2 \
+    --max_seq_length=96 \
     --sample_interval=1 \
     --sample_temperature=0.3 \
     --sample_top_k=20 \
     --sample_top_p=0.9 \
-    --clip_grad=0.5
+    --clip_grad=0.1
 > "$LOG_FILE" 2>&1
 
 echo "Training completed! Log saved to $LOG_FILE"

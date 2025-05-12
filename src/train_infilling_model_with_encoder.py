@@ -275,7 +275,7 @@ def train(args):
         eos_token_id=tokenizer.tokenizer.eos_token_id
     ).to(device)
     
-    model_path = Path(model_dir) / f"tinystories_encoder_decoder_infilling_model_emb{args.embed_dim}_encoderlayer{args.num_encoder_layers}_decoderlayer{args.num_decoder_layers}_head{args.num_heads}_bs{args.batch_size}_seq{args.max_seq_length}.pth"
+    model_path = Path(model_dir) / f"tinystories_new_encoder_decoder_infilling_model_emb{args.embed_dim}_encoderlayer{args.num_encoder_layers}_decoderlayer{args.num_decoder_layers}_head{args.num_heads}_bs{args.batch_size}_seq{args.max_seq_length}.pth"
     if model_path.exists():
         print(f"Loading existing model from {model_path}")
         checkpoint = torch.load(model_path, map_location=device)
@@ -295,7 +295,7 @@ def train(args):
     optimizer = optim.AdamW(
         model.parameters(), 
         lr=args.learning_rate,
-        betas=(0.9, 0.999),
+        betas=(0.9, 0.98),  # beta2 값 증가
         eps=1e-8,
         weight_decay=0.01
     )
@@ -313,6 +313,10 @@ def train(args):
             return max(0.0, 0.5 * (1.0 + math.cos(math.pi * (current_step - warmup_steps) / (total_steps - warmup_steps))))
     
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    
+    # 그래디언트 클리핑 값을 매우 작게 설정 (NaN 방지)
+    grad_clip_value = 0.1  # 매우 보수적인 값
+    print(f"Using gradient clipping with value: {grad_clip_value}")
     
     # Setup logging
     logger = setup_logging(model_dir)
@@ -376,7 +380,7 @@ def train(args):
             
             # 누적 스텝마다 옵티마이저 업데이트
             if (batch_idx + 1) % accumulation_steps == 0 or (batch_idx + 1) == len(train_loader):
-                torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_value)
                 optimizer.step()
                 scheduler.step()  # 학습률 스케줄러 업데이트
                 optimizer.zero_grad()

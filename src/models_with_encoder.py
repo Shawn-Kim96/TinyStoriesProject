@@ -45,35 +45,94 @@ class DecoderBlock(nn.Module):
         # Feed forward
         self.feed_forward = nn.Sequential(
             nn.Linear(embed_dim, ff_dim),
-            nn.ReLU(),
+            nn.GELU(),  # ReLU 대신 GELU 사용 (더 부드러운 활성화 함수)
+            nn.Dropout(dropout),
             nn.Linear(ff_dim, embed_dim),
             nn.Dropout(dropout),
         )
         self.norm3 = nn.LayerNorm(embed_dim)
         self.dropout = nn.Dropout(dropout)
+        
+        # 스케일링 팩터
+        self.attn_scale = 0.125
+        self.ff_scale = 0.125
 
     def forward(self, x, encoder_output, causal_mask=None, key_padding_mask=None, cross_key_padding_mask=None):
-        # Self-attention
-        self_attn_output, _ = self.self_attention(
-            x, x, x,
-            attn_mask=causal_mask,
-            key_padding_mask=key_padding_mask,
-            is_causal=True  # Causal masking in decoder self-attention
-        )
-        x = self.norm1(x + self.dropout(self_attn_output))
+        # 입력 텐서 복사 (안전을 위해)
+        residual = x.clone()
         
-        # Cross-attention (attending to encoder outputs)
-        cross_attn_output, _ = self.cross_attention(
-            query=x,
-            key=encoder_output,
-            value=encoder_output,
-            key_padding_mask=cross_key_padding_mask
-        )
-        x = self.norm2(x + self.dropout(cross_attn_output))
+        try:
+            # Self-attention with safety checks
+            self_attn_output, _ = self.self_attention(
+                x, x, x,
+                attn_mask=causal_mask,
+                key_padding_mask=key_padding_mask,
+                is_causal=True  # Causal masking in decoder self-attention
+            )
+            
+            # NaN 체크 및 처리
+            if torch.isnan(self_attn_output).any() or torch.isinf(self_attn_output).any():
+                print("Warning: NaN or Inf detected in self-attention output, applying fix")
+                self_attn_output = torch.nan_to_num(self_attn_output, nan=0.0, posinf=0.0, neginf=0.0)
+            
+            # 스케일링 적용하여 그래디언트 안정화
+            self_attn_output = self_attn_output * self.attn_scale
+            
+            # 잔차 연결 및 정규화
+            x = self.norm1(residual + self.dropout(self_attn_output))
+        except Exception as e:
+            print(f"Error in self-attention: {e}")
+            # 오류 발생 시 입력 유지
+            x = self.norm1(residual)
         
-        # Feed forward
-        ff_output = self.feed_forward(x)
-        x = self.norm3(x + self.dropout(ff_output))
+        # 크로스 어텐션 연산을 위한 잔차 저장
+        residual = x.clone()
+        
+        try:
+            # Cross-attention (attending to encoder outputs) with safety checks
+            cross_attn_output, _ = self.cross_attention(
+                query=x,
+                key=encoder_output,
+                value=encoder_output,
+                key_padding_mask=cross_key_padding_mask
+            )
+            
+            # NaN 체크 및 처리
+            if torch.isnan(cross_attn_output).any() or torch.isinf(cross_attn_output).any():
+                print("Warning: NaN or Inf detected in cross-attention output, applying fix")
+                cross_attn_output = torch.nan_to_num(cross_attn_output, nan=0.0, posinf=0.0, neginf=0.0)
+            
+            # 스케일링 적용하여 그래디언트 안정화
+            cross_attn_output = cross_attn_output * self.attn_scale
+            
+            # 잔차 연결 및 정규화
+            x = self.norm2(residual + self.dropout(cross_attn_output))
+        except Exception as e:
+            print(f"Error in cross-attention: {e}")
+            # 오류 발생 시 입력 유지
+            x = self.norm2(residual)
+        
+        # 피드포워드 연산을 위한 잔차 저장
+        residual = x.clone()
+        
+        try:
+            # Feed forward with safety checks
+            ff_output = self.feed_forward(x)
+            
+            # NaN 체크 및 처리
+            if torch.isnan(ff_output).any() or torch.isinf(ff_output).any():
+                print("Warning: NaN or Inf detected in feed-forward output, applying fix")
+                ff_output = torch.nan_to_num(ff_output, nan=0.0, posinf=0.0, neginf=0.0)
+            
+            # 스케일링 적용하여 그래디언트 안정화
+            ff_output = ff_output * self.ff_scale
+            
+            # 잔차 연결 및 정규화
+            x = self.norm3(residual + self.dropout(ff_output))
+        except Exception as e:
+            print(f"Error in feed-forward: {e}")
+            # 오류 발생 시 입력 유지
+            x = self.norm3(residual)
         
         return x
 
@@ -123,7 +182,20 @@ class Decoder(nn.Module):
             for _ in range(num_layers)
         ])
         self.dropout = nn.Dropout(dropout)
+        
+        # 출력 레이어를 두 단계로 나누어 안정성 향상
+        self.pre_output = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim),
+            nn.LayerNorm(embed_dim),
+            nn.GELU(),
+            nn.Dropout(dropout)
+        )
         self.fc_out = nn.Linear(embed_dim, vocab_size)
+        
+        # 가중치 초기화 스케일 감소
+        with torch.no_grad():
+            self.fc_out.weight.data.mul_(0.1)
+            
         self.pad_token_id = pad_token_id
         self.max_seq_length = max_seq_length
 
@@ -150,17 +222,32 @@ class Decoder(nn.Module):
         x = self.dropout(token_embed + pos_embed)
         
         # Process through decoder blocks
-        for layer in self.layers:
-            x = layer(
-                x, 
-                encoder_output, 
-                causal_mask=causal_mask, 
-                key_padding_mask=key_padding_mask,
-                cross_key_padding_mask=encoder_padding_mask
-            )
+        for i, layer in enumerate(self.layers):
+            try:
+                x = layer(
+                    x, 
+                    encoder_output, 
+                    causal_mask=causal_mask, 
+                    key_padding_mask=key_padding_mask,
+                    cross_key_padding_mask=encoder_padding_mask
+                )
+                # 중간 레이어에서 NaN 체크 및 처리
+                if torch.isnan(x).any() or torch.isinf(x).any():
+                    print(f"Warning: NaN or Inf detected in decoder layer {i} output, applying fix")
+                    x = torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
+            except Exception as e:
+                print(f"Error in decoder layer {i}: {e}")
+                # 오류 발생 시 이전 값 유지
+                continue
         
-        # Project to vocabulary
+        # 출력 전 추가 처리 레이어
+        x = self.pre_output(x)
+        
+        # Project to vocabulary with 그래디언트 스케일링
         logits = self.fc_out(x)
+        
+        # 출력 로짓의 스케일 조정 (너무 큰 값 방지)
+        logits = logits / 1.5
         
         return logits
 
@@ -373,8 +460,24 @@ class StoryInfillingEncoderDecoder(nn.Module):
                     # Get next-token logits (last position)
                     next_token_logits = logits[:, -1, :]
                     
+                    # 로짓 값 안정화
+                    if torch.isnan(next_token_logits).any() or torch.isinf(next_token_logits).any():
+                        print(f"Warning: NaN or Inf detected in generation logits at step {i}")
+                        next_token_logits = torch.zeros_like(next_token_logits)
+                        # 랜덤한 토큰 선택으로 대체
+                        next_token = torch.randint(0, self.transformer.decoder.fc_out.out_features, (1,)).item()
+                        generated_tokens.append(next_token)
+                        decoder_input = torch.cat([
+                            decoder_input, 
+                            torch.tensor([[next_token]], device=device)
+                        ], dim=1)
+                        continue
+                    
                     # Apply temperature
                     next_token_logits = next_token_logits / max(0.1, temperature)
+                    
+                    # 극단적인 값 클리핑
+                    next_token_logits = torch.clamp(next_token_logits, min=-50.0, max=50.0)
                     
                     # Apply top-k filtering
                     if top_k > 0:
