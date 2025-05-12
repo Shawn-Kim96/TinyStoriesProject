@@ -64,7 +64,7 @@ CUDA_LAUNCH_BLOCKING=1 python -m src.train_infilling_model_with_encoder \
     --model_dir="$MODEL_DIR" \
     --cache_dir="$CACHE_DIR" \
     --offline_mode \
-    --batch_size=32 \
+    --batch_size=64 \
     --num_epochs=20 \
     --learning_rate=3e-4 \
     --embed_dim=256 \

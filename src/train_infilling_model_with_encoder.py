@@ -276,9 +276,9 @@ def train(args):
     model_path = Path(model_dir) / f"tinystories_encoder_decoder_infilling_model_emb{args.embed_dim}_encoderlayer{args.num_encoder_layers}_decoderlayer{args.num_decoder_layers}_head{args.num_heads}_bs{args.batch_size}_seq{args.max_seq_length}.pth"
     if model_path.exists():
         print(f"Loading existing model from {model_path}")
-        model.load_state_dict(torch.load(model_path))
-
-    
+        checkpoint = torch.load(model_path, map_location=device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        
     # Loss function and optimizer
     criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
     optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)

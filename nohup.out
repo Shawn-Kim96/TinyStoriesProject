@@ -1,0 +1,33 @@
+Running TinyStories training on HPC
+Data directory: /data/cmpe258-sp25/018219422/data
+Model directory: /data/cmpe258-sp25/018219422/models
+Cache directory: /data/cmpe258-sp25/018219422/cache
+Log directory: /data/cmpe258-sp25/018219422/logs
+Current directory: /home/018219422/TinyStoriesProject
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/fs/atipa/home/018219422/TinyStoriesProject/src/train_infilling_model_with_encoder.py", line 474, in <module>
+    train(args)
+  File "/fs/atipa/home/018219422/TinyStoriesProject/src/train_infilling_model_with_encoder.py", line 163, in train
+    train_dataset = TinyStoriesDataset(data_dir, "train", args.max_samples)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/fs/atipa/home/018219422/TinyStoriesProject/src/train_infilling_model_with_encoder.py", line 36, in __init__
+    self.data.append(json.loads(line))
+                     ^^^^^^^^^^^^^^^^
+  File "/home/018219422/.conda/envs/tinystories/lib/python3.11/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/018219422/.conda/envs/tinystories/lib/python3.11/json/decoder.py", line 337, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/018219422/.conda/envs/tinystories/lib/python3.11/json/decoder.py", line 353, in raw_decode
+    obj, end = self.scan_once(s, idx)
+               ^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+Using device: cuda
+Using model directory: /data/cmpe258-sp25/018219422/models
+Using cache directory: /data/cmpe258-sp25/018219422/cache/datasets
+Running in offline mode
+Loading dataset...
+Loading data from /data/cmpe258-sp25/018219422/data/tinystories_data/train.jsonl
