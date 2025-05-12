@@ -13,6 +13,7 @@ import pickle
 import logging
 import sys
 from datetime import datetime
+import math
 
 # Import the encoder-decoder classes
 from src.dataset_with_encoder import TinyStoriesEncoderDecoderDataset, encoder_decoder_padding_collate_fn
@@ -273,15 +274,45 @@ def train(args):
         bos_token_id=tokenizer.tokenizer.bos_token_id,
         eos_token_id=tokenizer.tokenizer.eos_token_id
     ).to(device)
+    
     model_path = Path(model_dir) / f"tinystories_encoder_decoder_infilling_model_emb{args.embed_dim}_encoderlayer{args.num_encoder_layers}_decoderlayer{args.num_decoder_layers}_head{args.num_heads}_bs{args.batch_size}_seq{args.max_seq_length}.pth"
     if model_path.exists():
         print(f"Loading existing model from {model_path}")
         checkpoint = torch.load(model_path, map_location=device)
         model.load_state_dict(checkpoint['model_state_dict'])
         
+        # 모델 로드 후 학습률 조정 (기존 모델을 이어서 학습할 때 더 낮은 학습률 사용)
+        if 'epoch' in checkpoint:
+            print(f"Resuming from epoch {checkpoint['epoch']}")
+            # 이미 일정 에폭 학습한 경우 학습률 감소
+            args.learning_rate = args.learning_rate * 0.5
+            print(f"Adjusting learning rate to {args.learning_rate} for continued training")
+        
     # Loss function and optimizer
-    criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
-    optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
+    criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id, reduction='mean', label_smoothing=0.1)
+    
+    # AdamW 옵티마이저 사용 (가중치 감쇠 적용)
+    optimizer = optim.AdamW(
+        model.parameters(), 
+        lr=args.learning_rate,
+        betas=(0.9, 0.999),
+        eps=1e-8,
+        weight_decay=0.01
+    )
+    
+    # 학습률 스케줄러 설정
+    total_steps = len(train_loader) * args.num_epochs
+    warmup_steps = int(total_steps * 0.1)  # 전체 스텝의 10%를 워밍업으로 사용
+    
+    def lr_lambda(current_step):
+        if current_step < warmup_steps:
+            # 워밍업 단계에서는 학습률을 선형적으로 증가
+            return float(current_step) / float(max(1, warmup_steps))
+        else:
+            # 워밍업 이후에는 코사인 감소
+            return max(0.0, 0.5 * (1.0 + math.cos(math.pi * (current_step - warmup_steps) / (total_steps - warmup_steps))))
+    
+    scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
     
     # Setup logging
     logger = setup_logging(model_dir)
@@ -297,6 +328,10 @@ def train(args):
         train_loss = 0.0
         start_time = time.time()
         
+        # 그래디언트 누적을 위한 설정
+        accumulation_steps = 4  # 4개 배치마다 업데이트
+        optimizer.zero_grad()
+        
         for batch_idx, batch in enumerate(train_loader):
             # Move tensors to device
             encoder_input_ids = batch['encoder_input_ids'].to(device)
@@ -305,8 +340,6 @@ def train(args):
             encoder_padding_mask = batch['encoder_padding_mask'].to(device) if 'encoder_padding_mask' in batch else None
             decoder_padding_mask = batch['decoder_padding_mask'].to(device) if 'decoder_padding_mask' in batch else None
             
-            optimizer.zero_grad()
-            
             # Forward pass
             logits = model(encoder_input_ids, decoder_input_ids)
             
@@ -314,18 +347,47 @@ def train(args):
             batch_size, seq_len, vocab_size = logits.shape
             logits_flat = logits.reshape(-1, vocab_size)
             target_flat = decoder_target_ids.reshape(-1)
+            
+            # 안전장치: NaN이나 무한대 값이 있는지 확인
+            if torch.isnan(logits_flat).any() or torch.isinf(logits_flat).any():
+                print(f"Warning: NaN or Inf detected in logits at batch {batch_idx}")
+                # NaN 값을 0으로 대체
+                logits_flat = torch.nan_to_num(logits_flat, nan=0.0, posinf=0.0, neginf=0.0)
+            
             batch_loss = criterion(logits_flat, target_flat)
+            
+            # 손실 값이 비정상적으로 크면 스킵
+            if torch.isnan(batch_loss) or torch.isinf(batch_loss) or batch_loss > 1000:
+                print(f"Warning: Abnormal loss value: {batch_loss.item()} at batch {batch_idx}, skipping...")
+                continue
+            
+            # 그래디언트 누적을 위해 손실을 누적 스텝으로 나눔
+            batch_loss = batch_loss / accumulation_steps
             
             # Backward and optimize
             batch_loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
-            optimizer.step()
             
-            train_loss += batch_loss.item()
+            # 그래디언트 클리핑 전에 NaN 그래디언트 확인 및 처리
+            for name, param in model.named_parameters():
+                if param.grad is not None:
+                    if torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
+                        print(f"Warning: NaN or Inf gradient detected in {name}, zeroing it")
+                        param.grad = torch.zeros_like(param.grad)
+            
+            # 누적 스텝마다 옵티마이저 업데이트
+            if (batch_idx + 1) % accumulation_steps == 0 or (batch_idx + 1) == len(train_loader):
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
+                optimizer.step()
+                scheduler.step()  # 학습률 스케줄러 업데이트
+                optimizer.zero_grad()
+            
+            train_loss += batch_loss.item() * accumulation_steps  # 원래 손실 값으로 복원하여 기록
             
             if (batch_idx + 1) % args.log_interval == 0:
                 print(f"Epoch [{epoch+1}/{args.num_epochs}], Batch [{batch_idx+1}/{len(train_loader)}], "
-                      f"Loss: {batch_loss.item():.4f}, Time: {time.time() - start_time:.2f}s")
+                      f"Loss: {batch_loss.item() * accumulation_steps:.4f}, "
+                      f"LR: {scheduler.get_last_lr()[0]:.6f}, "
+                      f"Time: {time.time() - start_time:.2f}s")
                 start_time = time.time()
         
         avg_train_loss = train_loss / len(train_loader)
@@ -349,11 +411,28 @@ def train(args):
                 batch_size, seq_len, vocab_size = logits.shape
                 logits_flat = logits.reshape(-1, vocab_size)
                 target_flat = decoder_target_ids.reshape(-1)
+                
+                # 안전장치: NaN이나 무한대 값이 있는지 확인
+                if torch.isnan(logits_flat).any() or torch.isinf(logits_flat).any():
+                    print(f"Warning: NaN or Inf detected in validation logits")
+                    # NaN 값을 0으로 대체
+                    logits_flat = torch.nan_to_num(logits_flat, nan=0.0, posinf=0.0, neginf=0.0)
+                
                 batch_loss = criterion(logits_flat, target_flat)
+                
+                # 손실 값이 비정상적이면 스킵
+                if torch.isnan(batch_loss) or torch.isinf(batch_loss) or batch_loss > 1000:
+                    print(f"Warning: Abnormal validation loss value: {batch_loss.item()}, skipping...")
+                    continue
                 
                 valid_loss += batch_loss.item()
         
-        avg_valid_loss = valid_loss / len(valid_loader)
+        # 검증 손실이 NaN이면 이전 최적 손실 유지
+        if math.isnan(valid_loss) or math.isinf(valid_loss):
+            print("Warning: Validation loss is NaN or Inf, keeping previous best loss")
+            avg_valid_loss = float('inf')  # 이 에폭에서는 모델 저장하지 않음
+        else:
+            avg_valid_loss = valid_loss / len(valid_loader)
         
         print(f"Epoch [{epoch+1}/{args.num_epochs}], "
               f"Train Loss: {avg_train_loss:.4f}, Valid Loss: {avg_valid_loss:.4f}")
@@ -371,18 +450,21 @@ def train(args):
             print(f"Last sentence: {last_sentence}")
             
             # Generate story infilling using the model
-            generated_story = model.generate(
-                first_sentence=first_sentence, 
-                last_sentence=last_sentence, 
-                tokenizer=tokenizer, 
-                max_length=100,
-                temperature=args.sample_temperature,
-                top_k=args.sample_top_k,
-                top_p=args.sample_top_p
-            )
-            
-            print(f"Generated story: {generated_story}")
-            print(f"Original story: {sample['full_story']}")
+            try:
+                generated_story = model.generate(
+                    first_sentence=first_sentence, 
+                    last_sentence=last_sentence, 
+                    tokenizer=tokenizer, 
+                    max_length=100,
+                    temperature=args.sample_temperature,
+                    top_k=args.sample_top_k,
+                    top_p=args.sample_top_p
+                )
+                
+                print(f"Generated story: {generated_story}")
+                print(f"Original story: {sample['full_story']}")
+            except Exception as e:
+                print(f"Error during sample generation: {str(e)}")
         
         # Save the model if it has the best validation loss so far
         if avg_valid_loss < best_valid_loss:
@@ -395,6 +477,7 @@ def train(args):
                 'epoch': epoch + 1,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
                 'train_loss': avg_train_loss,
                 'valid_loss': avg_valid_loss,
                 'tokenizer_model': args.tokenizer_model,

@@ -234,6 +234,35 @@ class StoryInfillingEncoderDecoder(nn.Module):
         self.eos_token_id = eos_token_id
         self.max_seq_length = max_seq_length
         
+        # 가중치 초기화를 통한 안정적인 학습
+        self._init_weights()
+    
+    def _init_weights(self):
+        """모델 가중치를 적절하게 초기화"""
+        # 임베딩 레이어 초기화
+        if hasattr(self.transformer.encoder, 'token_embedding'):
+            nn.init.normal_(self.transformer.encoder.token_embedding.weight, mean=0.0, std=0.02)
+        if hasattr(self.transformer.decoder, 'token_embedding'):
+            nn.init.normal_(self.transformer.decoder.token_embedding.weight, mean=0.0, std=0.02)
+            
+        # 포지션 임베딩 초기화
+        if hasattr(self.transformer.encoder, 'position_embedding'):
+            nn.init.normal_(self.transformer.encoder.position_embedding.weight, mean=0.0, std=0.02)
+        if hasattr(self.transformer.decoder, 'position_embedding'):
+            nn.init.normal_(self.transformer.decoder.position_embedding.weight, mean=0.0, std=0.02)
+        
+        # 선형 레이어 초기화
+        for name, module in self.named_modules():
+            if isinstance(module, nn.Linear):
+                # 선형 레이어 가중치 초기화
+                nn.init.normal_(module.weight, mean=0.0, std=0.02)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.LayerNorm):
+                # 레이어 정규화 초기화
+                nn.init.ones_(module.weight)
+                nn.init.zeros_(module.bias)
+
     def forward(self, encoder_input, decoder_input=None):
         """
         Forward pass for training.
