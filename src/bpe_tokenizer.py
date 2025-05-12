@@ -70,47 +70,46 @@ class BPETokenizerWrapper:
                     print(f"- Snapshot contents: {os.listdir(possible_snapshot_dirs[0])}")
             raise
         
-        # Add special tokens
-        if special_tokens:
-            # Prepare special tokens dictionary
-            special_tokens_dict = {}
+        # Make sure we have necessary tokens
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+            print("Set pad_token to eos_token")
+
+        # Make sure all special tokens are properly added
+        blank_token = special_tokens.get("blank_token", "<blank>") if special_tokens else "<blank>"
+        
+        # 1. First check if blank token exists in vocabulary
+        blank_token_id = self.tokenizer.convert_tokens_to_ids(blank_token) 
+        
+        # 2. If blank token is unknown token, add it explicitly
+        if blank_token_id == self.tokenizer.unk_token_id:
+            print(f"Adding {blank_token} as a special token to tokenizer")
+            special_tokens_dict = {"additional_special_tokens": [blank_token]}
+            num_added = self.tokenizer.add_special_tokens(special_tokens_dict)
+            print(f"Added {num_added} special tokens to the tokenizer")
             
-            # Handle blank_token
-            blank_token = special_tokens.get("blank_token", "<blank>")
+            # Also add it directly as a new token in vocabulary
+            num_added = self.tokenizer.add_tokens([blank_token])
+            print(f"Added {blank_token} directly to vocabulary, new tokens: {num_added}")
             
-            # Prepare additional special tokens list
-            additional_tokens = []
-            if blank_token:
-                additional_tokens.append(blank_token)
+            # Get the new ID
+            blank_token_id = self.tokenizer.convert_tokens_to_ids(blank_token)
+            print(f"Blank token '{blank_token}' has ID: {blank_token_id}")
             
-            # Add any additional special tokens from dictionary
-            if additional_tokens:
-                special_tokens_dict["additional_special_tokens"] = additional_tokens
-                
-            # Add special tokens to tokenizer
-            if special_tokens_dict:
-                num_added = self.tokenizer.add_special_tokens(special_tokens_dict)
-                print(f"Added {num_added} special tokens to the tokenizer")
-            
-            # Ensure pad token exists
-            if self.tokenizer.pad_token is None:
-                self.tokenizer.pad_token = self.tokenizer.eos_token
-                print("Set pad_token to eos_token")
+            # Sanity check
+            if blank_token_id == self.tokenizer.unk_token_id:
+                print(f"WARNING: Failed to add {blank_token} properly. Will use unk_token as fallback.")
+        else:
+            print(f"Blank token '{blank_token}' already in vocabulary with ID: {blank_token_id}")
         
         # Store special token IDs
         self.pad_token_id = self.tokenizer.pad_token_id
-        # Handle blank token ID safely
-        blank_token = special_tokens.get("blank_token", "<blank>") if special_tokens else "<blank>"
-        self.blank_token_id = self.tokenizer.convert_tokens_to_ids(blank_token)
-        print(f"Blank token '{blank_token}' has ID: {self.blank_token_id}")
+        self.blank_token_id = blank_token_id
+        self.bos_token_id = getattr(self.tokenizer, 'bos_token_id', None) or self.tokenizer.cls_token_id
+        self.eos_token_id = self.tokenizer.eos_token_id
         
-        # Check if blank token was properly added
-        if self.blank_token_id == self.tokenizer.unk_token_id:
-            print(f"WARNING: Blank token '{blank_token}' was converted to the unknown token ID: {self.blank_token_id}")
-            # Try adding it again directly 
-            self.tokenizer.add_tokens([blank_token])
-            self.blank_token_id = self.tokenizer.convert_tokens_to_ids(blank_token)
-            print(f"Re-added blank token, new ID: {self.blank_token_id}")
+        # Print token IDs for debugging
+        print(f"Token IDs - PAD: {self.pad_token_id}, BLANK: {self.blank_token_id}, BOS: {self.bos_token_id}, EOS: {self.eos_token_id}")
         
         # Cache vocab
         self.vocab = self.tokenizer.get_vocab()

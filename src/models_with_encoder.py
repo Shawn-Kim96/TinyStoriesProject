@@ -316,93 +316,119 @@ class StoryInfillingEncoderDecoder(nn.Module):
         self.eval()
         device = self._get_device()
         
+        print(f"Generating with temperature={temperature}, top_k={top_k}, top_p={top_p}")
+        
         # Prepare encoder input
         encoder_input = self._prepare_encoder_input(first_sentence, last_sentence, tokenizer)
+        print(f"Encoder input shape: {encoder_input.shape}")
         
-        # Run encoder once (this is efficient compared to decoder-only approach)
-        with torch.no_grad():
-            encoder_output = self.transformer.encoder(encoder_input)
-            encoder_padding_mask = (encoder_input == self.pad_token_id) if self.pad_token_id is not None else None
-        
-        # Start with BOS token for decoder input
-        decoder_input = self._prepare_decoder_input()
-        
-        # Autoregressive generation
-        generated_tokens = []
-        
-        for _ in range(max_length):
+        try:
+            # Run encoder once (this is efficient compared to decoder-only approach)
             with torch.no_grad():
-                # Forward through decoder only
-                logits = self.transformer.decoder(decoder_input, encoder_output, encoder_padding_mask)
-                
-                # Get next-token logits (last position)
-                next_token_logits = logits[:, -1, :] / temperature
-                
-                # Apply top-k filtering
-                if top_k > 0:
-                    indices_to_remove = next_token_logits < torch.topk(next_token_logits, top_k)[0][..., -1, None]
-                    next_token_logits[indices_to_remove] = float('-inf')
-
-                # Apply top-p (nucleus) filtering
-                if top_p < 1.0:
-                    sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
-                    cumulative_probs = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1)
-                    sorted_indices_to_remove = cumulative_probs > top_p
- 
-                    # Shift the indices to keep also the first token above the threshold
-                    sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
-                    sorted_indices_to_remove[..., 0] = 0
+                encoder_output = self.transformer.encoder(encoder_input)
+                print(f"Encoder output shape: {encoder_output.shape}")
+                encoder_padding_mask = (encoder_input == self.pad_token_id) if self.pad_token_id is not None else None
+            
+            # Start with BOS token for decoder input
+            decoder_input = self._prepare_decoder_input()
+            print(f"Initial decoder input shape: {decoder_input.shape}")
+            
+            # Autoregressive generation
+            generated_tokens = []
+            
+            for i in range(max_length):
+                with torch.no_grad():
+                    # Forward through decoder only
+                    logits = self.transformer.decoder(decoder_input, encoder_output, encoder_padding_mask)
                     
-                    indices_to_remove = sorted_indices[sorted_indices_to_remove]
-                    next_token_logits[0, indices_to_remove] = float('-inf')
-
-                # Sample from filtered distribution
-                probs = torch.softmax(next_token_logits, dim=-1)
-                
-                # Check for NaN or negative values in probs
-                if torch.isnan(probs).any() or (probs < 0).any():
-                    # Fix problematic probabilities
-                    probs = torch.nan_to_num(probs, nan=1e-7, posinf=1e-7, neginf=1e-7)
-                    # Ensure non-negative
-                    probs = torch.clamp(probs, min=1e-7)
-                    # Renormalize
-                    probs = probs / probs.sum(dim=-1, keepdim=True)
-                
-                # Safety check for sum
-                if not (0.99 < probs.sum() < 1.01):
-                    probs = probs / probs.sum(dim=-1, keepdim=True)
-                
-                # Use softmax again to be safe
-                try:
-                    next_token = torch.multinomial(probs, num_samples=1).item()
-                except Exception as e:
-                    # Fallback: just pick most likely token
-                    print(f"Sampling failed, falling back to argmax: {e}")
-                    next_token = torch.argmax(probs).item()
-                
-                # Stop if EOS token is generated
-                if next_token == self.eos_token_id:
-                    break
+                    # Get next-token logits (last position)
+                    next_token_logits = logits[:, -1, :]
                     
-                # Add to generated tokens
-                generated_tokens.append(next_token)
-                
-                # Extend decoder input for next iteration
-                decoder_input = torch.cat([
-                    decoder_input, 
-                    torch.tensor([[next_token]], device=device)
-                ], dim=1)
-        
-        # Create the complete story
-        middle_part = tokenizer.decode(generated_tokens)
-        
-        # Replace the blank token with the generated middle
-        result = first_sentence + " " + middle_part + " " + last_sentence
-        
-        # Clean up the text 
-        result = result.replace("<blank>", "").replace("  ", " ")
-        
-        return result
+                    # Apply temperature
+                    next_token_logits = next_token_logits / max(0.1, temperature)
+                    
+                    # Apply top-k filtering
+                    if top_k > 0:
+                        top_k_values, top_k_indices = torch.topk(next_token_logits, min(top_k, next_token_logits.size(-1)))
+                        next_token_logits = torch.full_like(next_token_logits, float('-inf'))
+                        next_token_logits.scatter_(1, top_k_indices, top_k_values)
+
+                    # Apply top-p (nucleus) filtering
+                    if top_p < 1.0:
+                        sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
+                        cumulative_probs = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1)
+                        
+                        # Remove tokens with cumulative probability above the threshold
+                        sorted_indices_to_remove = cumulative_probs > top_p
+                        
+                        # Shift the indices to keep also the first token above the threshold
+                        sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+                        sorted_indices_to_remove[..., 0] = 0
+                        
+                        # Set indices to remove to -inf
+                        indices_to_remove = sorted_indices[sorted_indices_to_remove]
+                        next_token_logits[0, indices_to_remove] = float('-inf')
+
+                    # Sample from filtered distribution
+                    probs = torch.softmax(next_token_logits, dim=-1)
+                    
+                    # Ensure we have valid probabilities
+                    if torch.isnan(probs).any() or (probs < 0).any():
+                        print(f"Warning: Found NaN or negative probabilities at step {i}")
+                        probs = torch.nan_to_num(probs, nan=1e-8)
+                        probs = torch.clamp(probs, min=1e-8)
+                        probs = probs / probs.sum(dim=-1, keepdim=True)
+                    
+                    try:
+                        next_token = torch.multinomial(probs, num_samples=1).item()
+                    except Exception as e:
+                        print(f"Sampling failed at step {i}, falling back to argmax: {e}")
+                        next_token = torch.argmax(next_token_logits).item()
+                    
+                    # Stop if EOS token is generated or we've reached max length
+                    if next_token == self.eos_token_id or next_token == tokenizer.tokenizer.eos_token_id:
+                        print(f"Generated EOS token at step {i}")
+                        break
+                        
+                    # Skip blank token and unknown token
+                    if next_token == tokenizer.blank_token_id or next_token == tokenizer.tokenizer.unk_token_id:
+                        print(f"Skipping special token {next_token} at step {i}")
+                        continue
+                    
+                    # Add to generated tokens
+                    generated_tokens.append(next_token)
+                    
+                    # Extend decoder input for next iteration
+                    decoder_input = torch.cat([
+                        decoder_input, 
+                        torch.tensor([[next_token]], device=device)
+                    ], dim=1)
+                    
+                    # Print progress every 10 tokens
+                    if i % 10 == 0:
+                        print(f"Generated {i} tokens so far")
+            
+            # Create the complete story
+            if not generated_tokens:
+                print("Warning: No tokens were generated")
+                middle_part = ""
+            else:
+                middle_part = tokenizer.decode(generated_tokens)
+                print(f"Generated middle part: {middle_part}")
+            
+            # Replace the blank token with the generated middle
+            result = first_sentence + " " + middle_part + " " + last_sentence
+            
+            # Clean up the text 
+            result = result.replace("<blank>", "").replace("  ", " ")
+            
+            return result
+            
+        except Exception as e:
+            print(f"Error in generation process: {e}")
+            # Return a fallback response if generation fails
+            result = first_sentence + " " + last_sentence
+            return result.replace("<blank>", "").replace("  ", " ")
     
     def train_forward(self, first_sentence, last_sentence, target_text, tokenizer):
         """

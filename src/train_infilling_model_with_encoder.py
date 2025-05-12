@@ -376,7 +376,9 @@ def train(args):
                 last_sentence=last_sentence, 
                 tokenizer=tokenizer, 
                 max_length=100,
-                temperature=0.8
+                temperature=args.sample_temperature,
+                top_k=args.sample_top_k,
+                top_p=args.sample_top_p
             )
             
             print(f"Generated story: {generated_story}")
@@ -406,29 +408,29 @@ def train(args):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train an encoder-decoder story infilling model on TinyStories dataset")
+    parser = argparse.ArgumentParser(description='Train a TinyStories infilling model with Encoder-Decoder architecture')
     
-    # Path parameters
-    parser.add_argument('--model_dir', type=str, default=str(get_model_dir()),
+    # File paths
+    parser.add_argument('--data_dir', type=str, default=get_data_dir(), 
+                        help='Directory with data files')
+    parser.add_argument('--model_dir', type=str, default=get_model_dir(), 
                         help='Directory to save model checkpoints')
-    parser.add_argument('--data_dir', type=str, default=str(get_data_dir()),
-                        help='Directory for datasets')
-    parser.add_argument('--cache_dir', type=str, default=str(get_cache_dir()),
-                        help='Directory for cache files')
-    
-    # Environment parameters
-    parser.add_argument('--offline_mode', action='store_true',
-                        help='Run in offline mode (no internet access)')
-    
+    parser.add_argument('--cache_dir', type=str, default=get_cache_dir(), 
+                        help='Directory to cache downloaded files')
+                        
     # Dataset parameters
-    parser.add_argument('--tokenizer_model', type=str, default=get_default_tokenizer_model(), 
-                        help='Pre-trained model to use for BPE tokenizer')
-    parser.add_argument('--max_seq_length', type=int, default=256, 
+    parser.add_argument('--offline_mode', action='store_true', 
+                        help='Run in offline mode with local files')
+    parser.add_argument('--max_samples', type=int, default=None, 
+                        help='Maximum number of samples to use (for debugging)')
+    parser.add_argument('--max_seq_length', type=int, default=128, 
                         help='Maximum sequence length')
-    parser.add_argument('--min_story_length', type=int, default=10, 
-                        help='Minimum story length to include (in tokens)')
+    parser.add_argument('--min_story_length', type=int, default=5, 
+                        help='Minimum story length in tokens')
+    parser.add_argument('--tokenizer_model', type=str, default=get_default_tokenizer_model(), 
+                        help='Tokenizer model to use')
     
-    # Model parameters
+    # Model architecture
     parser.add_argument('--embed_dim', type=int, default=384, 
                         help='Embedding dimension')
     parser.add_argument('--num_encoder_layers', type=int, default=3, 
@@ -456,15 +458,21 @@ def parse_args():
     parser.add_argument('--teacher_forcing_ratio', type=float, default=1.0, 
                         help='Teacher forcing ratio (used during training)')
     
+    # Sampling parameters
+    parser.add_argument('--sample_interval', type=int, default=5,
+                        help='Generate sample every N epochs')
+    parser.add_argument('--sample_temperature', type=float, default=0.8,
+                        help='Temperature for sampling during generation')
+    parser.add_argument('--sample_top_k', type=int, default=50,
+                        help='Top-k sampling parameter during generation')
+    parser.add_argument('--sample_top_p', type=float, default=0.9,
+                        help='Top-p (nucleus) sampling parameter during generation')
+    
     # Misc parameters
     parser.add_argument('--seed', type=int, default=42, 
                         help='Random seed')
     parser.add_argument('--log_interval', type=int, default=100, 
-                        help='Log interval in batches')
-    parser.add_argument('--sample_interval', type=int, default=1, 
-                        help='Sample generation interval in epochs')
-    parser.add_argument('--max_samples', type=int, default=None, 
-                        help='Maximum number of samples to load')
+                        help='Log interval in batch iterations')
     
     return parser.parse_args()
 

@@ -56,8 +56,6 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # Create a log filname dynamically
 LOG_FILE="$LOG_DIR/train_emb${EMBED_DIM}_layer${NUM_LAYERS}_head${NUM_HEADS}_bs${BATCH_SIZE}_seq${MAX_SEQ_LENGTH}.log"
 
-
-
 # Run training script in single GPU mode with smaller parameters
 CUDA_LAUNCH_BLOCKING=1 python -m src.train_infilling_model_with_encoder \
     --data_dir="$DATA_DIR" \
@@ -71,12 +69,16 @@ CUDA_LAUNCH_BLOCKING=1 python -m src.train_infilling_model_with_encoder \
     --num_encoder_layers=8 \
     --num_decoder_layers=8 \
     --num_heads=8 \
-    --ff_dim=256 \
+    --ff_dim=512 \
     --dropout=0.1 \
     --log_interval=100 \
     --seed=42 \
     --num_workers=8 \
-    --max_seq_length=128
+    --max_seq_length=128 \
+    --sample_interval=1 \
+    --sample_temperature=0.3 \
+    --sample_top_k=20 \
+    --sample_top_p=0.9
 > "$LOG_FILE" 2>&1
 
 echo "Training completed! Log saved to $LOG_FILE"
